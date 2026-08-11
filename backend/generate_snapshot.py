@@ -53,7 +53,7 @@ def main() -> None:
             timeout=3.0,
             max_candidates=400,
             workers=32,
-            real_proxy_limit=20,
+            real_proxy_limit=10,
         )
         source_results.extend(result["sources"])
         reachable_count += int(result["reachable"])
