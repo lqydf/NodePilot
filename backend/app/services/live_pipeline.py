@@ -46,19 +46,16 @@ def run_live_pipeline(
     timeout: float = 3.0,
     max_candidates: int = 1000,
     workers: int = 32,
+    real_proxy_limit: int = 60,
 ) -> LiveRun:
-    """Collect, probe and rank nodes.
+    """Collect globally, TCP-filter, then perform real proxy verification.
 
-    Set NODEPILOT_REAL_PROXY_TEST=1 to require a real proxied HTTPS request
-    through each TCP-reachable candidate. Local development retains TCP-only
-    probing so it does not require an external sing-box binary.
+    When NODEPILOT_REAL_PROXY_TEST=1, only the fastest TCP candidates are
+    passed to the expensive real proxy test. A final-ranked node must pass
+    both the proxied YouTube request and the separate throughput download.
     """
-    if limit < 1:
-        raise ValueError("limit must be at least 1")
-    if max_candidates < 1:
-        raise ValueError("max_candidates must be at least 1")
-    if workers < 1:
-        raise ValueError("workers must be at least 1")
+    if min(limit, max_candidates, workers, real_proxy_limit) < 1:
+        raise ValueError("limits and workers must be at least 1")
 
     nodes: list[Node] = []
     source_runs: list[SourceRun] = []
@@ -76,58 +73,72 @@ def run_live_pipeline(
 
     unique: dict[str, Node] = {node.node_id: node for node in nodes}
     candidates = list(unique.values())[:max_candidates]
-    measured: list[tuple[Node, Measurement]] = []
     real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
 
-    def measure(node: Node) -> tuple[Node, Measurement] | None:
+    def tcp_measure(node: Node) -> tuple[Node, Measurement] | None:
         host, port = _endpoint(node)
         if host is None or port is None:
             return None
-
         tcp = tcp_probe(host, port, timeout_s=timeout)
         if not tcp.connected or tcp.latency_ms is None:
             return None
-
-        if not real_proxy_test:
-            return node, Measurement(
-                latency_ms=tcp.latency_ms,
-                download_mbps=0.0,
-                packet_loss_pct=0.0,
-                availability_pct=100.0,
-            )
-
-        if not node.source_uri:
-            return None
-        result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
-        if not result.ok or result.latency_ms is None:
-            return None
-        elapsed_s = result.latency_ms / 1000
-        speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
         return node, Measurement(
-            latency_ms=result.latency_ms,
-            download_mbps=round(speed_mbps, 3),
+            latency_ms=tcp.latency_ms,
+            download_mbps=0.0,
             packet_loss_pct=0.0,
             availability_pct=100.0,
         )
 
+    tcp_reachable: list[tuple[Node, Measurement]] = []
     with ThreadPoolExecutor(max_workers=min(workers, len(candidates) or 1)) as pool:
-        futures = [pool.submit(measure, node) for node in candidates]
+        futures = [pool.submit(tcp_measure, node) for node in candidates]
         for future in as_completed(futures):
             item = future.result()
             if item is not None:
-                measured.append(item)
+                tcp_reachable.append(item)
 
-    measured.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
+    tcp_reachable.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
+
+    measured: list[tuple[Node, Measurement]] = []
+    if real_proxy_test:
+        proxy_candidates = tcp_reachable[:real_proxy_limit]
+
+        def proxy_measure(item: tuple[Node, Measurement]) -> tuple[Node, Measurement] | None:
+            node, _tcp = item
+            if not node.source_uri:
+                return None
+            result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
+            if not result.ok or result.latency_ms is None:
+                return None
+            elapsed_s = result.latency_ms / 1000
+            speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
+            return node, Measurement(
+                latency_ms=result.latency_ms,
+                download_mbps=round(speed_mbps, 3),
+                packet_loss_pct=0.0,
+                availability_pct=100.0,
+            )
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(proxy_candidates) or 1)) as pool:
+            futures = [pool.submit(proxy_measure, item) for item in proxy_candidates]
+            for future in as_completed(futures):
+                item = future.result()
+                if item is not None:
+                    measured.append(item)
+        measured.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
+
+    ranked = rank_nodes(measured, limit=limit)
+    reachable_source = measured if real_proxy_test else tcp_reachable
     reachable_ranked = [
         ReachableNode(node=node, measurement=measurement, rank=index)
-        for index, (node, measurement) in enumerate(measured[:limit], start=1)
+        for index, (node, measurement) in enumerate(reachable_source[:limit], start=1)
     ]
 
     return LiveRun(
         sources=source_runs,
         candidates=len(candidates),
-        reachable=len(measured),
-        ranked=rank_nodes(measured, limit=limit),
+        reachable=len(tcp_reachable),
+        ranked=ranked,
         reachable_ranked=reachable_ranked,
     )
 
