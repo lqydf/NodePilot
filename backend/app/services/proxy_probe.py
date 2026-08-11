@@ -13,7 +13,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 @dataclass(frozen=True, slots=True)
 class ProxyProbeResult:
     ok: bool
-    latency_ms: float | None
+    youtube_latency_ms: float | None
+    download_mbps: float | None
     bytes_received: int
     error: str | None = None
 
@@ -25,17 +26,17 @@ def probe_proxy(
     test_url: str = "https://www.youtube.com/generate_204",
     speed_url: str = "https://speed.cloudflare.com/__down?bytes=5000000",
 ) -> ProxyProbeResult:
-    """Verify a node with a real proxied YouTube request and a real download.
+    """Verify a node through a real local proxy.
 
-    The YouTube request answers the availability question; the separate fixed
-    download measures throughput. The latter must not be inferred from the
-    size of a YouTube HTML response.
+    A node is successful only when the proxied YouTube request succeeds and a
+    separate fixed-size download also succeeds. The YouTube request latency
+    and download throughput are measured independently.
     """
     binary = os.environ.get("SING_BOX_BIN", "sing-box")
     try:
         config = _build_config(source_uri)
     except ValueError as exc:
-        return ProxyProbeResult(False, None, 0, str(exc))
+        return ProxyProbeResult(False, None, None, 0, str(exc))
 
     local_port = _free_port()
     config["inbounds"][0]["listen_port"] = local_port
@@ -45,16 +46,21 @@ def probe_proxy(
         with open(config_path, "w", encoding="utf-8") as fh:
             json.dump(config, fh, ensure_ascii=False)
 
-        process = subprocess.Popen(
-            [binary, "run", "-c", config_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        try:
+            process = subprocess.Popen(
+                [binary, "run", "-c", config_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            return ProxyProbeResult(False, None, None, 0, f"sing_box_start_failed:{exc}")
+
         try:
             if not _wait_for_port(local_port, process, timeout_s=min(timeout_s, 3.0)):
-                return ProxyProbeResult(False, None, 0, "local_proxy_start_failed")
+                return ProxyProbeResult(False, None, None, 0, "local_proxy_start_failed")
 
+            youtube_started = time.perf_counter()
             youtube = _curl_request(
                 local_port,
                 test_url,
@@ -62,8 +68,12 @@ def probe_proxy(
                 output_path=os.path.join(tmp, "youtube.bin"),
                 compressed=True,
             )
+            youtube_latency_ms = (time.perf_counter() - youtube_started) * 1000
             if youtube[0] not in {"200", "204", "206"}:
-                return ProxyProbeResult(False, None, 0, f"youtube_http_status:{youtube[0]}")
+                return ProxyProbeResult(
+                    False, round(youtube_latency_ms, 2), None, 0,
+                    f"youtube_http_status:{youtube[0]}"
+                )
 
             started = time.perf_counter()
             speed = _curl_request(
@@ -73,16 +83,26 @@ def probe_proxy(
                 output_path=os.path.join(tmp, "speed.bin"),
                 compressed=False,
             )
-            elapsed = (time.perf_counter() - started) * 1000
+            elapsed_s = time.perf_counter() - started
             if speed[0] not in {"200", "206"}:
-                return ProxyProbeResult(False, None, 0, f"speed_http_status:{speed[0]}")
+                return ProxyProbeResult(
+                    False, round(youtube_latency_ms, 2), None, 0,
+                    f"speed_http_status:{speed[0]}"
+                )
 
             size = int(float(speed[1]))
-            if size <= 0 or elapsed <= 0:
-                return ProxyProbeResult(False, None, 0, "empty_speed_sample")
-            return ProxyProbeResult(True, round(elapsed, 2), size)
+            if size <= 0 or elapsed_s <= 0:
+                return ProxyProbeResult(False, round(youtube_latency_ms, 2), None, 0, "empty_speed_sample")
+
+            download_mbps = size * 8 / elapsed_s / 1_000_000
+            return ProxyProbeResult(
+                True,
+                round(youtube_latency_ms, 2),
+                round(download_mbps, 3),
+                size,
+            )
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            return ProxyProbeResult(False, None, 0, str(exc))
+            return ProxyProbeResult(False, None, None, 0, str(exc))
         finally:
             process.terminate()
             try:
@@ -100,30 +120,19 @@ def _curl_request(
     compressed: bool,
 ) -> tuple[str, str]:
     command = [
-        "curl",
-        "--silent",
-        "--show-error",
-        "--location",
-        "--proxy",
-        f"http://127.0.0.1:{local_port}",
-        "--connect-timeout",
-        str(max(1, int(timeout_s))),
-        "--max-time",
-        str(max(1, int(timeout_s))),
-        "--output",
-        output_path,
-        "--write-out",
-        "%{http_code} %{size_download}",
+        "curl", "--silent", "--show-error", "--location",
+        "--proxy", f"http://127.0.0.1:{local_port}",
+        "--connect-timeout", str(max(1, int(timeout_s))),
+        "--max-time", str(max(1, int(timeout_s))),
+        "--output", output_path,
+        "--write-out", "%{http_code} %{size_download}",
     ]
     if compressed:
         command.append("--compressed")
     command.append(url)
     completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=timeout_s + 2,
-        check=False,
+        command, capture_output=True, text=True,
+        timeout=timeout_s + 2, check=False,
     )
     if completed.returncode != 0:
         raise subprocess.SubprocessError(completed.stderr.strip() or "proxy_request_failed")
@@ -147,11 +156,8 @@ def _build_config(source_uri: str) -> dict[str, object]:
         if not parsed.username:
             raise ValueError("missing_vless_uuid")
         outbound: dict[str, object] = {
-            "type": "vless",
-            "tag": "node",
-            "server": parsed.hostname,
-            "server_port": parsed.port,
-            "uuid": unquote(parsed.username),
+            "type": "vless", "tag": "node", "server": parsed.hostname,
+            "server_port": parsed.port, "uuid": unquote(parsed.username),
         }
         if query.get("flow"):
             outbound["flow"] = query["flow"]
@@ -159,11 +165,8 @@ def _build_config(source_uri: str) -> dict[str, object]:
         if parsed.username is None:
             raise ValueError("missing_trojan_password")
         outbound = {
-            "type": "trojan",
-            "tag": "node",
-            "server": parsed.hostname,
-            "server_port": parsed.port,
-            "password": unquote(parsed.username),
+            "type": "trojan", "tag": "node", "server": parsed.hostname,
+            "server_port": parsed.port, "password": unquote(parsed.username),
         }
     else:
         method = parsed.username or query.get("method")
@@ -171,11 +174,8 @@ def _build_config(source_uri: str) -> dict[str, object]:
         if not method or not password:
             raise ValueError("missing_shadowsocks_credentials")
         outbound = {
-            "type": "shadowsocks",
-            "tag": "node",
-            "server": parsed.hostname,
-            "server_port": parsed.port,
-            "method": unquote(method),
+            "type": "shadowsocks", "tag": "node", "server": parsed.hostname,
+            "server_port": parsed.port, "method": unquote(method),
             "password": unquote(password),
         }
 
@@ -189,8 +189,7 @@ def _build_config(source_uri: str) -> dict[str, object]:
             if not public_key:
                 raise ValueError("missing_reality_public_key")
             tls["reality"] = {
-                "enabled": True,
-                "public_key": public_key,
+                "enabled": True, "public_key": public_key,
                 "short_id": query.get("sid", ""),
             }
         if query.get("fp"):
@@ -206,23 +205,14 @@ def _build_config(source_uri: str) -> dict[str, object]:
             outbound["transport"] = ws
         elif transport == "grpc":
             outbound["transport"] = {
-                "type": "grpc",
-                "service_name": query.get("serviceName", ""),
+                "type": "grpc", "service_name": query.get("serviceName", ""),
                 "idle_timeout": "30s",
             }
 
     return {
         "log": {"level": "error"},
-        "inbounds": [
-            {
-                "type": "mixed",
-                "tag": "mixed",
-                "listen": "127.0.0.1",
-                "listen_port": 0,
-            }
-        ],
-        "outbounds": [outbound],
-        "route": {"final": "node"},
+        "inbounds": [{"type": "mixed", "tag": "mixed", "listen": "127.0.0.1", "listen_port": 0}],
+        "outbounds": [outbound], "route": {"final": "node"},
     }
 
 
