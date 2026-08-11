@@ -16,7 +16,7 @@ def run_once(
     workers: int = 32,
     real_proxy_limit: int = 60,
 ) -> dict[str, object]:
-    """Run one real collection/probe cycle and return JSON-friendly summary data."""
+    """Run one real collection/probe cycle and return public-safe summary data."""
     result: LiveRun = run_live_pipeline(
         urls,
         region=region,
@@ -29,29 +29,34 @@ def run_once(
     )
 
     def ranked_item(item: object) -> dict[str, object]:
+        node = item.node
         return {
             "rank": item.rank,
-            "region": item.node.region,
+            "node_id": node.node_id,
+            "region": node.region,
+            "protocol": node.protocol,
             "score": item.quality.score,
             "latency_ms": item.measurement.latency_ms,
             "download_mbps": item.measurement.download_mbps,
-            "youtube_status": "通过" if item.node.node_id in result.youtube_verified else "未验证",
+            "speed_tested": item.measurement.download_mbps > 0,
+            "youtube_status": "通过" if node.node_id in result.youtube_verified else "未验证",
             "verification": "proxy_verified",
-            "source_uri": item.node.source_uri,
         }
 
     return {
         "sources": [asdict(source) for source in result.sources],
         "candidates": result.candidates,
         "reachable": result.reachable,
-        "proxy_verified": len(result.ranked),
+        "proxy_verified": result.proxy_verified,
         "youtube_verified": len(result.youtube_verified),
         "proxy_errors": result.proxy_errors,
         "ranked": [ranked_item(item) for item in result.ranked],
         "reachable_ranked": [
             {
                 "rank": item.rank,
+                "node_id": item.node.node_id,
                 "region": item.node.region,
+                "protocol": item.node.protocol,
                 "latency_ms": item.measurement.latency_ms,
                 "verification": "proxy_verified",
             }
