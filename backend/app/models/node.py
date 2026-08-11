@@ -11,6 +11,7 @@ class Node:
     node_id: str
     protocol: str
     region: Optional[str] = None
+    source_uri: Optional[str] = None
     latency_ms: Optional[float] = None
     download_mbps: Optional[float] = None
     packet_loss_pct: Optional[float] = None
