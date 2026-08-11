@@ -104,7 +104,7 @@ def run_live_pipeline(
             node, _tcp = item
             if not node.source_uri:
                 return None, "missing_source_uri"
-            result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
+            result = probe_proxy(node.source_uri, timeout_s=max(timeout, 5.0))
             if not result.ok or result.youtube_latency_ms is None or result.download_mbps is None:
                 return None, result.error or "proxy_verification_failed"
             return node, Measurement(
