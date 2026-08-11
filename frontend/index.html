@@ -44,15 +44,28 @@
       <div class="subscription-row">
         <code id="subUrl">https://nodepilot.example/api/sub/top10</code>
         <button id="copyBtn">复制地址</button>
+        <button id="qrBtn" type="button">生成二维码</button>
       </div>
     </section>
   </main>
+
+  <div id="qrModal" class="qr-modal" hidden>
+    <div class="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qrTitle">
+      <button id="qrClose" class="qr-close" type="button" aria-label="关闭">×</button>
+      <div class="eyebrow">SUBSCRIPTION QR</div>
+      <h2 id="qrTitle">TOP 10 订阅二维码</h2>
+      <div id="qrcode" class="qrcode"></div>
+      <code id="qrUrl"></code>
+      <p>用手机扫码即可复制或打开订阅地址。</p>
+    </div>
+  </div>
 
   <footer>
     <span>NodePilot V1 Preview</span>
     <span>数据仅用于网络质量测试展示</span>
   </footer>
 
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
