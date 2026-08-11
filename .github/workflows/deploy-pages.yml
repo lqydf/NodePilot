@@ -22,7 +22,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -32,8 +32,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install sing-box
+        run: |
+          curl -fsSL -o /tmp/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.13.18/sing-box-1.13.18-linux-amd64.tar.gz
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          SING_BOX_PATH=$(find /tmp -type f -name sing-box -perm -u+x | head -n 1)
+          test -n "$SING_BOX_PATH"
+          "$SING_BOX_PATH" version
+          echo "SING_BOX_BIN=$SING_BOX_PATH" >> "$GITHUB_ENV"
+
       - name: Generate real NodePilot snapshot
         working-directory: backend
+        env:
+          NODEPILOT_REAL_PROXY_TEST: "1"
         run: python generate_snapshot.py
 
       - name: Setup Pages
