@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.models.node import Node
 from app.services.collector import collect_from_text
@@ -36,6 +37,7 @@ class LiveRun:
     ranked: list[RankedNode]
     reachable_ranked: list[ReachableNode]
     proxy_verified: int
+    proxy_errors: dict[str, int] = field(default_factory=dict)
 
 
 def run_live_pipeline(
@@ -93,17 +95,18 @@ def run_live_pipeline(
     tcp_reachable.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
 
     measured: list[tuple[Node, Measurement]] = []
+    proxy_errors: Counter[str] = Counter()
     real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
     if real_proxy_test:
         proxy_candidates = tcp_reachable[:real_proxy_limit]
 
-        def proxy_measure(item: tuple[Node, Measurement]) -> tuple[Node, Measurement] | None:
+        def proxy_measure(item: tuple[Node, Measurement]) -> tuple[Node, Measurement] | tuple[None, str]:
             node, _tcp = item
             if not node.source_uri:
-                return None
+                return None, "missing_source_uri"
             result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
             if not result.ok or result.youtube_latency_ms is None or result.download_mbps is None:
-                return None
+                return None, result.error or "proxy_verification_failed"
             return node, Measurement(
                 latency_ms=result.youtube_latency_ms,
                 download_mbps=result.download_mbps,
@@ -115,8 +118,10 @@ def run_live_pipeline(
             futures = [pool.submit(proxy_measure, item) for item in proxy_candidates]
             for future in as_completed(futures):
                 item = future.result()
-                if item is not None:
-                    measured.append(item)
+                if item[0] is not None:
+                    measured.append(item)  # type: ignore[arg-type]
+                else:
+                    proxy_errors[item[1]] += 1
         measured.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
 
     ranked = rank_nodes(measured, limit=limit)
@@ -133,6 +138,7 @@ def run_live_pipeline(
         ranked=ranked,
         reachable_ranked=reachable_ranked,
         proxy_verified=len(measured),
+        proxy_errors=dict(proxy_errors),
     )
 
 
