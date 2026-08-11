@@ -21,8 +21,9 @@ function renderNodes(nodes) {
   }
   nodesRoot.innerHTML = nodes.map(node => {
     const verified = node.verification === 'proxy_verified';
-    const youtubeStatus = verified ? '通过' : '未验证';
-    const youtubeClass = verified ? 'verified' : '';
+    const youtubeVerified = node.youtube_status === '通过';
+    const youtubeStatus = youtubeVerified ? '通过' : '未验证';
+    const youtubeClass = youtubeVerified ? 'verified' : '';
     const connectionStatus = verified ? '代理可用' : 'TCP 可达';
     return `
     <article class="node-card">
