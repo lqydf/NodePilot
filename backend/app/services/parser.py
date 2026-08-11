@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import html
 import json
 from urllib.parse import urlsplit
@@ -15,7 +16,7 @@ def _decode_b64(value: str) -> bytes | None:
     value += "=" * (-len(value) % 4)
     try:
         return base64.b64decode(value, validate=False)
-    except (ValueError, base64.binascii.Error):
+    except (ValueError, binascii.Error):
         return None
 
 
