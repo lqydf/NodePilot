@@ -8,12 +8,7 @@ SUPPORTED_SCHEMES = {"vmess", "vless", "trojan", "ss"}
 
 
 def parse_node_uri(uri: str, *, region: str | None = None) -> Node | None:
-    """Parse a URI into a safe normalized record.
-
-    This parser intentionally does not connect to or probe the endpoint. It only
-    validates the URI scheme and stores a stable fingerprint for later testing.
-    The URI fragment is ignored so renaming a node does not create a duplicate.
-    """
+    """Parse a URI into a safe normalized record while preserving its source URI."""
     value = uri.strip()
     if not value or "://" not in value:
         return None
@@ -23,11 +18,14 @@ def parse_node_uri(uri: str, *, region: str | None = None) -> Node | None:
     if protocol not in SUPPORTED_SCHEMES or not parsed.hostname:
         return None
 
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
     endpoint = f"{parsed.hostname}:{port or ''}".lower()
     identity = parsed.username or ""
     node_id = f"{protocol}:{identity}@{endpoint}" if identity else f"{protocol}:{endpoint}"
-    return Node(node_id=node_id, protocol=protocol, region=region)
+    return Node(node_id=node_id, protocol=protocol, region=region, source_uri=value)
 
 
 def parse_text(text: str, *, region: str | None = None) -> list[Node]:
