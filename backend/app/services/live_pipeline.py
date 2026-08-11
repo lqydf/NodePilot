@@ -62,7 +62,7 @@ def run_live_pipeline(
 
     for url in urls:
         try:
-            text = fetch_text_source(url, timeout=timeout, max_bytes=8_000_000)
+            text = fetch_text_source(url, timeout=timeout)
         except SourceFetchError as exc:
             source_runs.append(SourceRun(url, False, 0, str(exc)))
             continue
