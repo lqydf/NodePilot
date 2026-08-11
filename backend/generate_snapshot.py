@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,57 +17,67 @@ SUB_FILE = FRONTEND / "sub" / "top10.txt"
 
 
 def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> list[dict[str, object]]:
-    ordered = sorted(items, key=lambda item: (-float(item.get("score", 0)), float(item.get("latency_ms", 999999)), str(item.get("node_id", ""))))
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            -float(item.get("score", 0)),
+            float(item.get("latency_ms", 999999)),
+            str(item.get("node_id", "")),
+        ),
+    )
     selected = ordered[:limit]
     for rank, item in enumerate(selected, start=1):
         item["rank"] = rank
     return selected
 
 
-def _scan_source(url: str, region_by_url: dict[str, str]) -> dict[str, object]:
-    return run_once([url], region_by_url=region_by_url, limit=10, timeout=3.0, max_candidates=120, workers=16, real_proxy_limit=150)
-
-
 def main() -> None:
     sources = [source for source in GLOBAL_SOURCES if source.enabled]
     urls = enabled_urls(sources)
     region_by_url = {source.url.strip(): source.region for source in sources if source.region}
-    source_results: list[dict[str, object]] = []
-    final_quality: list[dict[str, object]] = []
-    reachable_count = 0
-    proxy_errors: Counter[str] = Counter()
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_scan_source, url, region_by_url) for url in urls]
-        for future in as_completed(futures):
-            result = future.result()
-            source_results.extend(result["sources"])
-            reachable_count += int(result["reachable"])
-            final_quality.extend(result["ranked"])
-            proxy_errors.update(result.get("proxy_errors", {}))
+    # One production scan: fetch every source, globally deduplicate, TCP prefilter,
+    # then real-proxy-test the shared pool. This avoids testing the same node once
+    # per source and makes TOP10 a genuinely global ranking.
+    result = run_once(
+        urls,
+        region_by_url=region_by_url,
+        limit=10,
+        timeout=3.0,
+        max_candidates=1000,
+        workers=32,
+        real_proxy_limit=150,
+    )
 
+    final_quality = list(result["ranked"])
     published = _select_global_top10(final_quality, limit=10)
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     payload = {
         "generated_at": timestamp,
         "status": "proxy_verified" if published else "no_verified_nodes",
-        "final_quality_ranking": _select_global_top10(final_quality, limit=10),
+        "final_quality_ranking": published,
         "top10": published,
         "summary": {
-            "source_count": len(source_results),
-            "candidates": sum(int(result["node_count"]) for result in source_results),
-            "reachable": reachable_count,
-            "proxy_verified": len(final_quality),
+            "source_count": len(result["sources"]),
+            "candidates": int(result["candidates"]),
+            "reachable": int(result["reachable"]),
+            "proxy_verified": int(result["proxy_verified"]),
+            "youtube_verified": int(result["youtube_verified"]),
             "published": len(published),
-            "proxy_errors": dict(proxy_errors),
+            "proxy_errors": dict(result.get("proxy_errors", Counter())),
         },
     }
 
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     SUB_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    uris = [item["source_uri"] for item in published if item.get("source_uri")]
-    SUB_FILE.write_text(base64.b64encode(("\n".join(uris) + ("\n" if uris else "")).encode()).decode() + "\n", encoding="ascii")
+
+    # Shadowrocket-style subscription: the client fetches this URL and receives
+    # a base64-encoded newline-delimited server list. Credentials stay out of
+    # live.json and are exposed only through the subscription endpoint itself.
+    uris = [uri for uri in result.get("subscription_uris", []) if uri]
+    encoded = base64.b64encode(("\n".join(uris) + ("\n" if uris else "")).encode()).decode()
+    SUB_FILE.write_text(encoded + "\n", encoding="ascii")
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
 
 
