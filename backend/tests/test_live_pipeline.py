@@ -1,19 +1,22 @@
 from app.services.live_pipeline import run_live_pipeline
+from app.services.source_fetcher import SourceFetchError
 
 
 def test_live_pipeline_wires_fetch_parse_probe_and_rank(monkeypatch):
-    class FetchResult:
-        ok = True
-        text = "vless://user@example.com:443#one"
-        error = None
+    monkeypatch.setattr(
+        "app.services.live_pipeline.fetch_text_source",
+        lambda url, timeout: "vless://user@example.com:443#one",
+    )
 
     class ProbeResult:
         connected = True
         latency_ms = 42.0
         error = None
 
-    monkeypatch.setattr("app.services.live_pipeline.fetch_source", lambda url, timeout: FetchResult())
-    monkeypatch.setattr("app.services.live_pipeline.probe", lambda host, port, timeout: ProbeResult())
+    monkeypatch.setattr(
+        "app.services.live_pipeline.tcp_probe",
+        lambda host, port, timeout_s: ProbeResult(),
+    )
 
     result = run_live_pipeline(["https://example.com/nodes"], region="JP")
 
@@ -25,12 +28,10 @@ def test_live_pipeline_wires_fetch_parse_probe_and_rank(monkeypatch):
 
 
 def test_live_pipeline_records_source_failure(monkeypatch):
-    class FetchResult:
-        ok = False
-        text = ""
-        error = "timeout"
+    def fail_fetch(url, timeout):
+        raise SourceFetchError("timeout")
 
-    monkeypatch.setattr("app.services.live_pipeline.fetch_source", lambda url, timeout: FetchResult())
+    monkeypatch.setattr("app.services.live_pipeline.fetch_text_source", fail_fetch)
 
     result = run_live_pipeline(["https://example.com/nodes"])
 
