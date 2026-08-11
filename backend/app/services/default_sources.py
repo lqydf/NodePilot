@@ -18,6 +18,10 @@ GLOBAL_SOURCES = [
     SourceConfig(url="https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/countries/NL.txt", region="NL"),
     SourceConfig(url="https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/countries/FR.txt", region="FR"),
     SourceConfig(url="https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/countries/AU.txt", region="AU"),
+    SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/vless.txt", region=None),
+    SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/vmess.txt", region=None),
+    SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/trojan.txt", region=None),
+    SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/ss.txt", region=None),
 ]
 
 # Backward-compatible alias for older imports.
