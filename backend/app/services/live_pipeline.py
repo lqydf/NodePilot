@@ -50,8 +50,8 @@ def run_live_pipeline(
     """Collect, probe and rank nodes.
 
     Set NODEPILOT_REAL_PROXY_TEST=1 to require a real proxied HTTPS request
-    through each candidate. The normal local mode retains TCP-only probing so
-    development does not require an external sing-box binary.
+    through each TCP-reachable candidate. Local development retains TCP-only
+    probing so it does not require an external sing-box binary.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -80,30 +80,32 @@ def run_live_pipeline(
     real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
 
     def measure(node: Node) -> tuple[Node, Measurement] | None:
-        if real_proxy_test:
-            if not node.source_uri:
-                return None
-            result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
-            if not result.ok or result.latency_ms is None:
-                return None
-            elapsed_s = result.latency_ms / 1000
-            speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
+        host, port = _endpoint(node)
+        if host is None or port is None:
+            return None
+
+        tcp = tcp_probe(host, port, timeout_s=timeout)
+        if not tcp.connected or tcp.latency_ms is None:
+            return None
+
+        if not real_proxy_test:
             return node, Measurement(
-                latency_ms=result.latency_ms,
-                download_mbps=round(speed_mbps, 3),
+                latency_ms=tcp.latency_ms,
+                download_mbps=0.0,
                 packet_loss_pct=0.0,
                 availability_pct=100.0,
             )
 
-        host, port = _endpoint(node)
-        if host is None or port is None:
+        if not node.source_uri:
             return None
-        result = tcp_probe(host, port, timeout_s=timeout)
-        if not result.connected or result.latency_ms is None:
+        result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
+        if not result.ok or result.latency_ms is None:
             return None
+        elapsed_s = result.latency_ms / 1000
+        speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
         return node, Measurement(
             latency_ms=result.latency_ms,
-            download_mbps=0.0,
+            download_mbps=round(speed_mbps, 3),
             packet_loss_pct=0.0,
             availability_pct=100.0,
         )
