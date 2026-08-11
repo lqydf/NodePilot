@@ -19,15 +19,9 @@ SUB_FILE = FRONTEND / "sub" / "top10.txt"
 
 
 def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> list[dict[str, object]]:
-    """Select the globally best measured nodes without regional quotas."""
-    ordered = sorted(
-        items,
-        key=lambda item: (
-            -float(item.get("score", 0)),
-            float(item.get("latency_ms", 999999)),
-            str(item.get("node_id", "")),
-        ),
-    )
+    ordered = sorted(items, key=lambda item: (-float(item.get("score", 0)),
+                                              float(item.get("latency_ms", 999999)),
+                                              str(item.get("node_id", ""))))
     selected = ordered[:limit]
     for rank, item in enumerate(selected, start=1):
         item["rank"] = rank
@@ -35,29 +29,19 @@ def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> 
 
 
 def _scan_source(url: str, region_by_url: dict[str, str]) -> dict[str, object]:
-    return run_once(
-        [url],
-        region_by_url=region_by_url,
-        limit=10,
-        timeout=3.0,
-        max_candidates=120,
-        workers=16,
-        real_proxy_limit=30,
-    )
+    return run_once([url], region_by_url=region_by_url, limit=10, timeout=3.0,
+                    max_candidates=120, workers=16, real_proxy_limit=150)
 
 
 def main() -> None:
     sources = [source for source in GLOBAL_SOURCES if source.enabled]
     urls = enabled_urls(sources)
     region_by_url = {source.url.strip(): source.region for source in sources if source.region}
-
     source_results: list[dict[str, object]] = []
     final_quality: list[dict[str, object]] = []
     reachable_count = 0
     proxy_errors: Counter[str] = Counter()
 
-    # Run source scans concurrently. Each scan is independently capped so
-    # global collection remains broad while the real-proxy probes stay bounded.
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_scan_source, url, region_by_url) for url in urls]
         for future in as_completed(futures):
@@ -68,7 +52,6 @@ def main() -> None:
             proxy_errors.update(result.get("proxy_errors", {}))
 
     published = _select_global_top10(final_quality, limit=10)
-
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     real_proxy = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
     payload = {
@@ -85,15 +68,12 @@ def main() -> None:
             "proxy_errors": dict(proxy_errors),
         },
     }
-
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     SUB_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
     uris = [item["source_uri"] for item in published if item.get("source_uri")]
     encoded = base64.b64encode(("\n".join(uris) + ("\n" if uris else "")).encode()).decode()
     SUB_FILE.write_text(encoded + "\n", encoding="ascii")
-
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
 
 
