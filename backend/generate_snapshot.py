@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-极简版 NodePilot 生成器 - 纯TCP握手验证，不造假
-用法: python backend/generate_snapshot.py
-"""
 import asyncio
 import aiohttp
 import base64
@@ -12,13 +8,14 @@ import os
 
 # ==================== 配置区 ====================
 SOURCES = [
-    "https://raw.githubusercontent.com/you-dont-need/Another-Rule/master/Sub/ss.txt",
-    "https://raw.githubusercontent.com/ssrsub/ssr/master/ss-sub"
+    "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
+    "https://raw.githubusercontent.com/yaney01/autoproxy/master/ss.txt",
+    "https://raw.githubusercontent.com/ALIILAPRO/v2ray-ssr/master/ss"
 ]
 
 OUTPUT_JSON = "frontend/data/live.json"
 OUTPUT_TXT = "frontend/data/top10.txt"
-TCP_TIMEOUT = 2.5
+TCP_TIMEOUT = 5.0  # 从 2.5 秒延长到 5 秒，提高握手成功率
 # ===============================================
 
 def decode_ss_uri(uri):
@@ -41,7 +38,7 @@ def decode_ss_uri(uri):
             "password": password,
             "name": f"{host}:{port}"
         }
-    except Exception:
+    except Exception as e:
         return None
 
 async def tcp_is_alive(host, port):
@@ -57,7 +54,7 @@ async def tcp_is_alive(host, port):
         return False
 
 async def fetch_sources():
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
         tasks = [session.get(url) for url in SOURCES]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         all_uris = []
@@ -66,16 +63,27 @@ async def fetch_sources():
                 continue
             if resp.status == 200:
                 text = await resp.text()
+                # 只抓 ss:// 开头的链接
                 found = re.findall(r'ss://[^\s]+', text)
                 all_uris.extend(found)
         return list(set(all_uris))
 
 async def main():
     print("🚀 NodePilot 真实探测定时任务启动...")
+    
+    # ⭐ 关键修复：提前创建目录，确保 git add 永远能找到路径
+    os.makedirs(os.path.dirname(OUTPUT_TXT), exist_ok=True)
+
     uris = await fetch_sources()
-    print(f"📡 抓取到 {len(uris)} 条原始链接（去重后）")
+    print(f"📡 抓取到 {len(uris)} 条 ss:// 链接")
+    
     if not uris:
-        print("❌ 没有抓取到任何数据，请更换 SOURCES")
+        print("⚠️ 没有抓到任何 ss:// 链接，可能数据源已失效或全是 vmess/trojan 格式")
+        # 写入空文件，让工作流能继续提交（虽然空，但目录存在）
+        with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
+            f.write("# 暂无可用 ss 节点\n")
+        with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
+            json.dump([], f)
         return
 
     node_map = {}
@@ -85,8 +93,17 @@ async def main():
             key = f"{info['host']}:{info['port']}"
             if key not in node_map:
                 node_map[key] = info
+
     candidates = list(node_map.values())
-    print(f"🔍 解析出 {len(candidates)} 个不重复节点，开始TCP端口存活探测...")
+    print(f"🔍 解析出 {len(candidates)} 个不重复节点，开始TCP端口存活探测（超时 {TCP_TIMEOUT}秒）...")
+
+    if not candidates:
+        print("⚠️ 解析出的节点为空，可能 ss:// 格式不标准")
+        with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
+            f.write("# 解析失败\n")
+        with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        return
 
     tasks = [tcp_is_alive(node['host'], node['port']) for node in candidates]
     results = await asyncio.gather(*tasks)
@@ -100,21 +117,22 @@ async def main():
             print(f"✅ 存活: {node['host']}:{node['port']} ({node['method']})")
 
     print(f"🎯 探测完成！存活节点数量: {len(alive_nodes)}")
-    if not alive_nodes:
-        print("❌ 没有存活节点，请更换数据源或调整超时时间。")
-        return
 
-    os.makedirs(os.path.dirname(OUTPUT_TXT), exist_ok=True)
+    # 写入订阅文件（即使为空也写）
     with open(OUTPUT_TXT, 'w', encoding='utf-8') as f:
-        for node in alive_nodes[:10]:
-            user_pass = f"{node['method']}:{node['password']}"
-            encoded = base64.b64encode(user_pass.encode()).decode()
-            uri = f"ss://{encoded}@{node['host']}:{node['port']}#{node['name']}"
-            f.write(uri + "\n")
-    print(f"📝 订阅文件已生成: {OUTPUT_TXT}")
-
+        if alive_nodes:
+            for node in alive_nodes[:10]:
+                user_pass = f"{node['method']}:{node['password']}"
+                encoded = base64.b64encode(user_pass.encode()).decode()
+                uri = f"ss://{encoded}@{node['host']}:{node['port']}#{node['name']}"
+                f.write(uri + "\n")
+        else:
+            f.write("# 未探测到存活节点\n")
+    
     with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
         json.dump(alive_nodes[:10], f, indent=2, ensure_ascii=False)
+    
+    print(f"📝 订阅文件已生成: {OUTPUT_TXT}")
     print(f"📝 JSON文件已生成: {OUTPUT_JSON}")
 
 if __name__ == "__main__":
