@@ -4,6 +4,7 @@ import base64
 import json
 import os
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,18 @@ def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> 
     return selected
 
 
+def _scan_source(url: str, region_by_url: dict[str, str]) -> dict[str, object]:
+    return run_once(
+        [url],
+        region_by_url=region_by_url,
+        limit=10,
+        timeout=3.0,
+        max_candidates=120,
+        workers=16,
+        real_proxy_limit=30,
+    )
+
+
 def main() -> None:
     sources = [source for source in GLOBAL_SOURCES if source.enabled]
     urls = enabled_urls(sources)
@@ -43,22 +56,16 @@ def main() -> None:
     reachable_count = 0
     proxy_errors: Counter[str] = Counter()
 
-    # Scan each source independently so one large feed cannot consume the
-    # entire global candidate budget before other regions are considered.
-    for url in urls:
-        result = run_once(
-            [url],
-            region_by_url=region_by_url,
-            limit=10,
-            timeout=3.0,
-            max_candidates=120,
-            workers=32,
-            real_proxy_limit=30,
-        )
-        source_results.extend(result["sources"])
-        reachable_count += int(result["reachable"])
-        final_quality.extend(result["ranked"])
-        proxy_errors.update(result.get("proxy_errors", {}))
+    # Run source scans concurrently. Each scan is independently capped so
+    # global collection remains broad while the real-proxy probes stay bounded.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_scan_source, url, region_by_url) for url in urls]
+        for future in as_completed(futures):
+            result = future.result()
+            source_results.extend(result["sources"])
+            reachable_count += int(result["reachable"])
+            final_quality.extend(result["ranked"])
+            proxy_errors.update(result.get("proxy_errors", {}))
 
     published = _select_global_top10(final_quality, limit=10)
 
