@@ -8,7 +8,7 @@ class SourceFetchError(RuntimeError):
     """Raised when a public text source cannot be fetched safely."""
 
 
-def fetch_text_source(url: str, *, timeout: float = 10.0, max_bytes: int = 2_000_000) -> str:
+def fetch_text_source(url: str, *, timeout: float = 10.0, max_bytes: int = 8_000_000) -> str:
     """Fetch a bounded UTF-8 text source over HTTP(S).
 
     This adapter only retrieves public text. It does not execute source content,
