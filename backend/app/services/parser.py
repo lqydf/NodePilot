@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from urllib.parse import urlsplit
 
 from app.models.node import Node
@@ -8,8 +9,8 @@ SUPPORTED_SCHEMES = {"vmess", "vless", "trojan", "ss"}
 
 
 def parse_node_uri(uri: str, *, region: str | None = None) -> Node | None:
-    """Parse a URI into a safe normalized record while preserving its source URI."""
-    value = uri.strip()
+    """Parse a node URI, normalizing HTML-escaped query separators from public feeds."""
+    value = html.unescape(uri).strip()
     if not value or "://" not in value:
         return None
 
