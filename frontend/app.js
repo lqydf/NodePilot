@@ -16,23 +16,25 @@ function escapeHtml(value) {
 
 function renderNodes(nodes) {
   if (!nodes.length) {
-    nodesRoot.innerHTML = '<div class="empty">本次扫描没有找到 TCP 可达节点。</div>';
+    nodesRoot.innerHTML = '<div class="empty">本次扫描没有找到通过真实代理验证的节点。</div>';
     return;
   }
   nodesRoot.innerHTML = nodes.map(node => {
-    const youtubeStatus = node.youtube_status || '未验证';
-    const youtubeClass = youtubeStatus === '通过' ? 'verified' : '';
+    const verified = node.verification === 'proxy_verified';
+    const youtubeStatus = verified ? '通过' : '未验证';
+    const youtubeClass = verified ? 'verified' : '';
+    const connectionStatus = verified ? '代理可用' : 'TCP 可达';
     return `
     <article class="node-card">
       <div class="rank">#${node.rank}</div>
       <div>
-        <div class="node-name">${escapeHtml(node.region || '亚洲候选')}</div>
+        <div class="node-name">${escapeHtml(node.region || '未知地区')}</div>
         <div class="node-region">NodePilot 自动筛选</div>
       </div>
       <div class="metric"><div class="metric-label">延迟</div><div class="metric-value">${Number(node.latency_ms).toFixed(1)} ms</div></div>
-      <div class="metric"><div class="metric-label">状态</div><div class="metric-value">TCP 可达</div></div>
+      <div class="metric"><div class="metric-label">状态</div><div class="metric-value">${connectionStatus}</div></div>
       <div class="metric"><div class="metric-label">速度</div><div class="metric-value">${node.download_mbps == null ? '未测' : `${Number(node.download_mbps).toFixed(1)} Mbps`}</div></div>
-      <div class="metric"><div class="metric-label">YouTube</div><div class="metric-value ${youtubeClass}">${escapeHtml(youtubeStatus)}</div></div>
+      <div class="metric"><div class="metric-label">YouTube</div><div class="metric-value ${youtubeClass}">${youtubeStatus}</div></div>
       <div class="score">${node.rank}<small> / 10</small></div>
     </article>
   `;
@@ -44,7 +46,7 @@ function setupSubscription() {
   subUrl.textContent = url;
   copyBtn.disabled = false;
   qrBtn.disabled = false;
-  subStatus.textContent = '订阅地址只展示 NodePilot 自动筛选后的 TOP 10。节点详细地址不会在网页公开展示。';
+  subStatus.textContent = '订阅地址只包含 NodePilot 自动验证后的 TOP 10。节点详细地址不会在网页公开展示。';
 }
 
 async function loadSnapshot() {
@@ -57,7 +59,10 @@ async function loadSnapshot() {
     updatedAt.textContent = `最后更新：${data.generated_at || '未知'}`;
     candidateCount.textContent = `候选节点：${data.summary?.candidates ?? 0}`;
     reachableCount.textContent = `TCP 可达：${data.summary?.reachable ?? 0}`;
-    navStatus.innerHTML = '<span class="dot"></span> 真实数据已加载';
+    const verified = Number(data.summary?.proxy_verified ?? 0);
+    navStatus.innerHTML = verified > 0
+      ? `<span class="dot"></span> 已验证 ${verified} 个可用节点`
+      : '<span class="dot"></span> 正在等待真实代理验证';
     setupSubscription();
   } catch (error) {
     nodesRoot.innerHTML = '<div class="empty">真实数据暂时不可用，请稍后刷新。</div>';
