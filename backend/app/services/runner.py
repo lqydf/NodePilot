@@ -45,6 +45,7 @@ def run_once(
         "candidates": result.candidates,
         "reachable": result.reachable,
         "proxy_verified": len(result.ranked),
+        "proxy_errors": result.proxy_errors,
         "ranked": [ranked_item(item) for item in result.ranked],
         "reachable_ranked": [
             {
