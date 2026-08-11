@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models.node import Node
+from app.services.collector import collect_from_text
 from app.services.measurement import Measurement
-from app.services.probe import probe
+from app.services.probe import ProbeResult, tcp_probe
 from app.services.ranker import RankedNode, rank_nodes
 from app.services.source_fetcher import fetch_source
-from app.services.collector import collect_from_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +52,10 @@ def run_live_pipeline(
     reachable = 0
 
     for node in candidates:
-        host_port = node.node_id.split("@", 1)[-1]
-        host, _, port_text = host_port.rpartition(":")
-        if not host or not port_text.isdigit():
+        host, port = _endpoint(node)
+        if host is None:
             continue
-        result = probe(host, int(port_text), timeout=timeout)
+        result = tcp_probe(host, port, timeout_s=timeout)
         if not result.connected or result.latency_ms is None:
             continue
         reachable += 1
@@ -78,3 +77,15 @@ def run_live_pipeline(
         reachable=reachable,
         ranked=rank_nodes(measured, limit=limit),
     )
+
+
+def _endpoint(node: Node) -> tuple[str, int] | tuple[None, None]:
+    """Extract the endpoint from the canonical node id without probing arbitrary text."""
+    endpoint = node.node_id.rsplit("@", 1)[-1]
+    host, separator, port_text = endpoint.rpartition(":")
+    if not separator or not host or not port_text.isdigit():
+        return None, None
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        return None, None
+    return host.strip("[]"), port
