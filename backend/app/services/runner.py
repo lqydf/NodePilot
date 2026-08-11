@@ -9,6 +9,7 @@ def run_once(
     urls: list[str],
     *,
     region: str | None = None,
+    region_by_url: dict[str, str] | None = None,
     limit: int = 10,
     timeout: float = 3.0,
     max_candidates: int = 1000,
@@ -18,6 +19,7 @@ def run_once(
     result: LiveRun = run_live_pipeline(
         urls,
         region=region,
+        region_by_url=region_by_url,
         limit=limit,
         timeout=timeout,
         max_candidates=max_candidates,
