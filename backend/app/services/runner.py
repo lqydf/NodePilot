@@ -35,7 +35,7 @@ def run_once(
             "score": item.quality.score,
             "latency_ms": item.measurement.latency_ms,
             "download_mbps": item.measurement.download_mbps,
-            "youtube_status": "通过",
+            "youtube_status": "通过" if item.node.node_id in result.youtube_verified else "未验证",
             "verification": "proxy_verified",
             "source_uri": item.node.source_uri,
         }
@@ -45,6 +45,7 @@ def run_once(
         "candidates": result.candidates,
         "reachable": result.reachable,
         "proxy_verified": len(result.ranked),
+        "youtube_verified": len(result.youtube_verified),
         "proxy_errors": result.proxy_errors,
         "ranked": [ranked_item(item) for item in result.ranked],
         "reachable_ranked": [
