@@ -16,7 +16,11 @@ def run_once(
     workers: int = 32,
     real_proxy_limit: int = 60,
 ) -> dict[str, object]:
-    """Run one real collection/probe cycle and return public-safe summary data."""
+    """Run one real collection/probe cycle and return public-safe summary data.
+
+    ``subscription_uris`` is an internal-only field consumed by the snapshot
+    writer. It must never be serialized into frontend/data/live.json.
+    """
     result: LiveRun = run_live_pipeline(
         urls,
         region=region,
@@ -39,6 +43,7 @@ def run_once(
             "latency_ms": item.measurement.latency_ms,
             "download_mbps": item.measurement.download_mbps,
             "speed_tested": item.measurement.download_mbps > 0,
+            "provisional": item.provisional,
             "youtube_status": "通过" if node.node_id in result.youtube_verified else "未验证",
             "verification": "proxy_verified",
         }
@@ -62,4 +67,5 @@ def run_once(
             }
             for item in result.reachable_ranked
         ],
+        "subscription_uris": [item.node.source_uri for item in result.ranked if item.node.source_uri],
     }
