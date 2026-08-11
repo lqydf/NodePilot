@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,8 +18,19 @@ class ProxyProbeResult:
     error: str | None = None
 
 
-def probe_proxy(source_uri: str, *, timeout_s: float = 8.0, test_url: str = "https://www.youtube.com/") -> ProxyProbeResult:
-    """Perform a real proxied HTTPS request through a VLESS/Trojan/SS node."""
+def probe_proxy(
+    source_uri: str,
+    *,
+    timeout_s: float = 8.0,
+    test_url: str = "https://www.youtube.com/generate_204",
+    speed_url: str = "https://speed.cloudflare.com/__down?bytes=5000000",
+) -> ProxyProbeResult:
+    """Verify a node with a real proxied YouTube request and a real download.
+
+    The YouTube request answers the availability question; the separate fixed
+    download measures throughput. The latter must not be inferred from the
+    size of a YouTube HTML response.
+    """
     binary = os.environ.get("SING_BOX_BIN", "sing-box")
     try:
         config = _build_config(source_uri)
@@ -44,28 +55,31 @@ def probe_proxy(source_uri: str, *, timeout_s: float = 8.0, test_url: str = "htt
             if not _wait_for_port(local_port, process, timeout_s=min(timeout_s, 3.0)):
                 return ProxyProbeResult(False, None, 0, "local_proxy_start_failed")
 
-            started = time.perf_counter()
-            command = [
-                "curl", "--silent", "--show-error", "--location",
-                "--proxy", f"http://127.0.0.1:{local_port}",
-                "--connect-timeout", str(max(1, int(timeout_s))),
-                "--max-time", str(max(1, int(timeout_s))),
-                "--output", os.path.join(tmp, "response.bin"),
-                "--write-out", "%{http_code} %{size_download}",
+            youtube = _curl_request(
+                local_port,
                 test_url,
-            ]
-            completed = subprocess.run(
-                command, capture_output=True, text=True,
-                timeout=timeout_s + 2, check=False,
+                timeout_s=timeout_s,
+                output_path=os.path.join(tmp, "youtube.bin"),
+                compressed=True,
+            )
+            if youtube[0] not in {"200", "204", "206"}:
+                return ProxyProbeResult(False, None, 0, f"youtube_http_status:{youtube[0]}")
+
+            started = time.perf_counter()
+            speed = _curl_request(
+                local_port,
+                speed_url,
+                timeout_s=timeout_s,
+                output_path=os.path.join(tmp, "speed.bin"),
+                compressed=False,
             )
             elapsed = (time.perf_counter() - started) * 1000
-            if completed.returncode != 0:
-                return ProxyProbeResult(False, None, 0, completed.stderr.strip() or "proxy_request_failed")
+            if speed[0] not in {"200", "206"}:
+                return ProxyProbeResult(False, None, 0, f"speed_http_status:{speed[0]}")
 
-            parts = completed.stdout.strip().split()
-            if len(parts) != 2 or parts[0] not in {"200", "204", "206"}:
-                return ProxyProbeResult(False, None, 0, f"unexpected_http_status:{parts[0] if parts else 'unknown'}")
-            size = int(float(parts[1]))
+            size = int(float(speed[1]))
+            if size <= 0 or elapsed <= 0:
+                return ProxyProbeResult(False, None, 0, "empty_speed_sample")
             return ProxyProbeResult(True, round(elapsed, 2), size)
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             return ProxyProbeResult(False, None, 0, str(exc))
@@ -77,29 +91,93 @@ def probe_proxy(source_uri: str, *, timeout_s: float = 8.0, test_url: str = "htt
                 process.kill()
 
 
+def _curl_request(
+    local_port: int,
+    url: str,
+    *,
+    timeout_s: float,
+    output_path: str,
+    compressed: bool,
+) -> tuple[str, str]:
+    command = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--proxy",
+        f"http://127.0.0.1:{local_port}",
+        "--connect-timeout",
+        str(max(1, int(timeout_s))),
+        "--max-time",
+        str(max(1, int(timeout_s))),
+        "--output",
+        output_path,
+        "--write-out",
+        "%{http_code} %{size_download}",
+    ]
+    if compressed:
+        command.append("--compressed")
+    command.append(url)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s + 2,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise subprocess.SubprocessError(completed.stderr.strip() or "proxy_request_failed")
+    parts = completed.stdout.strip().split()
+    if len(parts) != 2:
+        raise ValueError("invalid_curl_result")
+    return parts[0], parts[1]
+
+
 def _build_config(source_uri: str) -> dict[str, object]:
     parsed = urlsplit(source_uri.strip())
     protocol = parsed.scheme.lower()
     if protocol not in {"vless", "trojan", "ss"} or not parsed.hostname or not parsed.port:
         raise ValueError("unsupported_or_invalid_uri")
-    query = {key: values[-1] for key, values in parse_qs(parsed.query, keep_blank_values=True).items()}
+    query = {
+        key: unquote(values[-1])
+        for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
+    }
 
     if protocol == "vless":
         if not parsed.username:
             raise ValueError("missing_vless_uuid")
-        outbound: dict[str, object] = {"type": "vless", "tag": "node", "server": parsed.hostname, "server_port": parsed.port, "uuid": parsed.username}
+        outbound: dict[str, object] = {
+            "type": "vless",
+            "tag": "node",
+            "server": parsed.hostname,
+            "server_port": parsed.port,
+            "uuid": unquote(parsed.username),
+        }
         if query.get("flow"):
             outbound["flow"] = query["flow"]
     elif protocol == "trojan":
         if parsed.username is None:
             raise ValueError("missing_trojan_password")
-        outbound = {"type": "trojan", "tag": "node", "server": parsed.hostname, "server_port": parsed.port, "password": parsed.username}
+        outbound = {
+            "type": "trojan",
+            "tag": "node",
+            "server": parsed.hostname,
+            "server_port": parsed.port,
+            "password": unquote(parsed.username),
+        }
     else:
         method = parsed.username or query.get("method")
         password = parsed.password or query.get("password")
         if not method or not password:
             raise ValueError("missing_shadowsocks_credentials")
-        outbound = {"type": "shadowsocks", "tag": "node", "server": parsed.hostname, "server_port": parsed.port, "method": method, "password": password}
+        outbound = {
+            "type": "shadowsocks",
+            "tag": "node",
+            "server": parsed.hostname,
+            "server_port": parsed.port,
+            "method": unquote(method),
+            "password": unquote(password),
+        }
 
     security = query.get("security", "")
     if protocol in {"vless", "trojan"} and security in {"tls", "reality"}:
@@ -110,23 +188,39 @@ def _build_config(source_uri: str) -> dict[str, object]:
             public_key = query.get("pbk")
             if not public_key:
                 raise ValueError("missing_reality_public_key")
-            tls["reality"] = {"enabled": True, "public_key": public_key, "short_id": query.get("sid", "")}
+            tls["reality"] = {
+                "enabled": True,
+                "public_key": public_key,
+                "short_id": query.get("sid", ""),
+            }
         if query.get("fp"):
             tls["utls"] = {"enabled": True, "fingerprint": query["fp"]}
         outbound["tls"] = tls
 
-        transport = query.get("type", "tcp")
+    transport = query.get("type", "tcp")
+    if protocol in {"vless", "trojan"}:
         if transport == "ws":
             ws: dict[str, object] = {"type": "ws", "path": query.get("path", "/")}
             if query.get("host"):
                 ws["headers"] = {"Host": query["host"]}
             outbound["transport"] = ws
         elif transport == "grpc":
-            outbound["transport"] = {"type": "grpc", "service_name": query.get("serviceName", ""), "idle_timeout": "30s"}
+            outbound["transport"] = {
+                "type": "grpc",
+                "service_name": query.get("serviceName", ""),
+                "idle_timeout": "30s",
+            }
 
     return {
         "log": {"level": "error"},
-        "inbounds": [{"type": "mixed", "tag": "mixed", "listen": "127.0.0.1", "listen_port": 0}],
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed",
+                "listen": "127.0.0.1",
+                "listen_port": 0,
+            }
+        ],
         "outbounds": [outbound],
         "route": {"final": "node"},
     }
