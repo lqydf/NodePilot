@@ -12,6 +12,7 @@ def parse_node_uri(uri: str, *, region: str | None = None) -> Node | None:
 
     This parser intentionally does not connect to or probe the endpoint. It only
     validates the URI scheme and stores a stable fingerprint for later testing.
+    The URI fragment is ignored so renaming a node does not create a duplicate.
     """
     value = uri.strip()
     if not value or "://" not in value:
@@ -23,8 +24,9 @@ def parse_node_uri(uri: str, *, region: str | None = None) -> Node | None:
         return None
 
     port = parsed.port
-    endpoint = f"{parsed.hostname}:{port or ''}"
-    node_id = f"{protocol}:{endpoint}".lower()
+    endpoint = f"{parsed.hostname}:{port or ''}".lower()
+    identity = parsed.username or ""
+    node_id = f"{protocol}:{identity}@{endpoint}" if identity else f"{protocol}:{endpoint}"
     return Node(node_id=node_id, protocol=protocol, region=region)
 
 
