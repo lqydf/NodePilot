@@ -29,12 +29,7 @@ def probe_proxy(
     connectivity_url: str = "https://www.gstatic.com/generate_204",
     speed_url: str = "https://speed.cloudflare.com/__down?bytes=1000000",
 ) -> ProxyProbeResult:
-    """Verify a node through its actual proxy path.
-
-    A neutral Google connectivity endpoint is used as the hard proxy-usability
-    gate. YouTube is then tested independently because public proxy IPs can be
-    reset by Google's anti-abuse controls even when the proxy itself works.
-    """
+    """Verify a node through its actual proxy path."""
     binary = os.environ.get("SING_BOX_BIN", "sing-box")
     try:
         config = _build_config(source_uri)
@@ -180,7 +175,10 @@ def _build_config(source_uri: str) -> dict[str, object]:
             "server_port": parsed.port, "uuid": unquote(parsed.username),
         }
         if query.get("flow"):
-            outbound["flow"] = query["flow"]
+            flow = query["flow"]
+            if flow == "xtls-rprx-vision-udp443":
+                flow = "xtls-rprx-vision"
+            outbound["flow"] = flow
     elif protocol == "trojan":
         if parsed.username is None:
             raise ValueError("missing_trojan_password")
@@ -250,7 +248,11 @@ def _apply_transport_and_tls(outbound: dict[str, object], query: dict[str, str])
                 "enabled": True, "public_key": public_key,
                 "short_id": query.get("sid", ""),
             }
-        if query.get("fp"):
+            tls["utls"] = {
+                "enabled": True,
+                "fingerprint": query.get("fp") or "chrome",
+            }
+        elif query.get("fp"):
             tls["utls"] = {"enabled": True, "fingerprint": query["fp"]}
         outbound["tls"] = tls
 
