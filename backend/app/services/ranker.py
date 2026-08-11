@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.source import Node
+from app.models.node import Node
 from app.services.measurement import Measurement
 from app.services.quality import QualityResult, quality_score
 
