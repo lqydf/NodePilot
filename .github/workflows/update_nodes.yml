@@ -1,15 +1,17 @@
 name: 自动抓取真实节点
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:          # 手动触发
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 */4 * * *'    # 每4小时运行一次
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # 授予写入仓库的权限（解决 git push 报错 exit 128）
     permissions:
-      contents: write   # 修复 git push 权限
+      contents: write
 
     steps:
       - name: 拉取代码
@@ -26,15 +28,10 @@ jobs:
       - name: 运行真实节点探测脚本
         run: python backend/generate_snapshot.py
 
-      - name: 提交更新到仓库（如果有数据）
+      - name: 提交更新到仓库（即使空文件也提交）
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # 只有 frontend/data 目录存在且非空时才提交
-          if [ -d "frontend/data" ] && [ "$(ls -A frontend/data 2>/dev/null)" ]; then
-            git add frontend/data/
-            git diff --staged --quiet || git commit -m "🤖 自动更新可用节点数据"
-            git push
-          else
-            echo "📭 frontend/data 目录不存在或为空，本次无节点可更新，跳过提交。"
-          fi
+          git add frontend/data/
+          git diff --staged --quiet || git commit -m "🤖 自动更新节点数据"
+          git push
