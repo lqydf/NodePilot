@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 @dataclass(frozen=True, slots=True)
 class ProxyProbeResult:
     ok: bool
+    youtube_ok: bool
     youtube_latency_ms: float | None
     download_mbps: float | None
     bytes_received: int
@@ -25,13 +26,20 @@ def probe_proxy(
     *,
     timeout_s: float = 8.0,
     test_url: str = "https://www.youtube.com/generate_204",
+    connectivity_url: str = "https://www.gstatic.com/generate_204",
     speed_url: str = "https://speed.cloudflare.com/__down?bytes=1000000",
 ) -> ProxyProbeResult:
+    """Verify a node through its actual proxy path.
+
+    A neutral Google connectivity endpoint is used as the hard proxy-usability
+    gate. YouTube is then tested independently because public proxy IPs can be
+    reset by Google's anti-abuse controls even when the proxy itself works.
+    """
     binary = os.environ.get("SING_BOX_BIN", "sing-box")
     try:
         config = _build_config(source_uri)
     except ValueError as exc:
-        return ProxyProbeResult(False, None, None, 0, str(exc))
+        return ProxyProbeResult(False, False, None, None, 0, str(exc))
 
     local_port = _free_port()
     config["inbounds"][0]["listen_port"] = local_port
@@ -47,10 +55,10 @@ def probe_proxy(
                 capture_output=True, text=True, timeout=5, check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            return ProxyProbeResult(False, None, None, 0, f"sing_box_check_failed:{exc}")
+            return ProxyProbeResult(False, False, None, None, 0, f"sing_box_check_failed:{exc}")
         if check.returncode != 0:
             return ProxyProbeResult(
-                False, None, None, 0,
+                False, False, None, None, 0,
                 f"invalid_sing_box_config:{check.stderr.strip()[:300]}",
             )
 
@@ -60,22 +68,40 @@ def probe_proxy(
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
             )
         except OSError as exc:
-            return ProxyProbeResult(False, None, None, 0, f"sing_box_start_failed:{exc}")
+            return ProxyProbeResult(False, False, None, None, 0, f"sing_box_start_failed:{exc}")
 
         try:
             if not _wait_for_port(local_port, process, min(timeout_s, 3.0)):
-                return ProxyProbeResult(False, None, None, 0,
+                return ProxyProbeResult(False, False, None, None, 0,
                                         f"local_proxy_start_failed:{_process_error(process)}")
 
-            started = time.perf_counter()
-            youtube = _curl_request(
-                local_port, test_url, timeout_s=timeout_s,
-                output_path=os.path.join(tmp, "youtube.bin"), compressed=True,
+            connectivity_started = time.perf_counter()
+            connectivity = _curl_request(
+                local_port, connectivity_url, timeout_s=timeout_s,
+                output_path=os.path.join(tmp, "connectivity.bin"), compressed=False,
             )
-            youtube_latency_ms = (time.perf_counter() - started) * 1000
-            if not youtube[0].startswith(("2", "3")):
-                return ProxyProbeResult(False, round(youtube_latency_ms, 2), None, 0,
-                                        f"youtube_http_status:{youtube[0]}")
+            connectivity_latency_ms = (time.perf_counter() - connectivity_started) * 1000
+            if not connectivity[0].startswith(("2", "3")):
+                return ProxyProbeResult(
+                    False, False, round(connectivity_latency_ms, 2), None, 0,
+                    f"connectivity_http_status:{connectivity[0]}",
+                )
+
+            youtube_ok = False
+            youtube_latency_ms: float | None = None
+            youtube_error: str | None = None
+            try:
+                started = time.perf_counter()
+                youtube = _curl_request(
+                    local_port, test_url, timeout_s=timeout_s,
+                    output_path=os.path.join(tmp, "youtube.bin"), compressed=True,
+                )
+                youtube_latency_ms = round((time.perf_counter() - started) * 1000, 2)
+                youtube_ok = youtube[0].startswith(("2", "3"))
+                if not youtube_ok:
+                    youtube_error = f"youtube_http_status:{youtube[0]}"
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                youtube_error = str(exc)
 
             started = time.perf_counter()
             speed = _curl_request(
@@ -84,18 +110,25 @@ def probe_proxy(
             )
             elapsed_s = time.perf_counter() - started
             if not speed[0].startswith(("2", "3")):
-                return ProxyProbeResult(False, round(youtube_latency_ms, 2), None, 0,
-                                        f"speed_http_status:{speed[0]}")
+                return ProxyProbeResult(
+                    False, youtube_ok, youtube_latency_ms, None, 0,
+                    f"speed_http_status:{speed[0]}",
+                )
             size = int(float(speed[1]))
             if size <= 0 or elapsed_s <= 0:
-                return ProxyProbeResult(False, round(youtube_latency_ms, 2), None, 0,
-                                        "empty_speed_sample")
+                return ProxyProbeResult(
+                    False, youtube_ok, youtube_latency_ms, None, 0, "empty_speed_sample",
+                )
             return ProxyProbeResult(
-                True, round(youtube_latency_ms, 2),
-                round(size * 8 / elapsed_s / 1_000_000, 3), size,
+                True,
+                youtube_ok,
+                youtube_latency_ms if youtube_latency_ms is not None else round(connectivity_latency_ms, 2),
+                round(size * 8 / elapsed_s / 1_000_000, 3),
+                size,
+                None if youtube_ok else f"youtube_unverified:{youtube_error or 'request_failed'}",
             )
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            return ProxyProbeResult(False, None, None, 0, str(exc))
+            return ProxyProbeResult(False, False, None, None, 0, str(exc))
         finally:
             process.terminate()
             try:
