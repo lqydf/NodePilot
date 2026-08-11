@@ -18,9 +18,10 @@ SUB_FILE = FRONTEND / "sub" / "top10.txt"
 def main() -> None:
     sources = [source for source in ASIA_SOURCES if source.enabled]
     urls = enabled_urls(sources)
+    region_by_url = {source.url.strip(): source.region for source in sources if source.region}
     result = run_once(
         urls,
-        region="ASIA",
+        region_by_url=region_by_url,
         limit=10,
         timeout=3.0,
         max_candidates=1000,
