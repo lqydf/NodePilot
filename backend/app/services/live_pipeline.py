@@ -35,6 +35,7 @@ class LiveRun:
     reachable: int
     ranked: list[RankedNode]
     reachable_ranked: list[ReachableNode]
+    proxy_verified: int
 
 
 def run_live_pipeline(
@@ -48,18 +49,12 @@ def run_live_pipeline(
     workers: int = 32,
     real_proxy_limit: int = 60,
 ) -> LiveRun:
-    """Collect globally, TCP-filter, then perform real proxy verification.
-
-    When NODEPILOT_REAL_PROXY_TEST=1, only the fastest TCP candidates are
-    passed to the expensive real proxy test. A final-ranked node must pass
-    both the proxied YouTube request and the separate throughput download.
-    """
+    """Collect globally, TCP-filter, then verify actual proxy usability."""
     if min(limit, max_candidates, workers, real_proxy_limit) < 1:
         raise ValueError("limits and workers must be at least 1")
 
     nodes: list[Node] = []
     source_runs: list[SourceRun] = []
-
     for url in urls:
         try:
             text = fetch_text_source(url, timeout=timeout)
@@ -73,7 +68,6 @@ def run_live_pipeline(
 
     unique: dict[str, Node] = {node.node_id: node for node in nodes}
     candidates = list(unique.values())[:max_candidates]
-    real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
 
     def tcp_measure(node: Node) -> tuple[Node, Measurement] | None:
         host, port = _endpoint(node)
@@ -96,10 +90,10 @@ def run_live_pipeline(
             item = future.result()
             if item is not None:
                 tcp_reachable.append(item)
-
     tcp_reachable.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
 
     measured: list[tuple[Node, Measurement]] = []
+    real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
     if real_proxy_test:
         proxy_candidates = tcp_reachable[:real_proxy_limit]
 
@@ -108,13 +102,11 @@ def run_live_pipeline(
             if not node.source_uri:
                 return None
             result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
-            if not result.ok or result.latency_ms is None:
+            if not result.ok or result.youtube_latency_ms is None or result.download_mbps is None:
                 return None
-            elapsed_s = result.latency_ms / 1000
-            speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
             return node, Measurement(
-                latency_ms=result.latency_ms,
-                download_mbps=round(speed_mbps, 3),
+                latency_ms=result.youtube_latency_ms,
+                download_mbps=result.download_mbps,
                 packet_loss_pct=0.0,
                 availability_pct=100.0,
             )
@@ -140,6 +132,7 @@ def run_live_pipeline(
         reachable=len(tcp_reachable),
         ranked=ranked,
         reachable_ranked=reachable_ranked,
+        proxy_verified=len(measured),
     )
 
 
