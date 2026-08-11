@@ -39,6 +39,7 @@ def run_live_pipeline(
     urls: list[str],
     *,
     region: str | None = None,
+    region_by_url: dict[str, str] | None = None,
     limit: int = 10,
     timeout: float = 3.0,
     max_candidates: int = 1000,
@@ -66,7 +67,8 @@ def run_live_pipeline(
         except SourceFetchError as exc:
             source_runs.append(SourceRun(url, False, 0, str(exc)))
             continue
-        parsed = collect_from_text(text, region=region)
+        source_region = (region_by_url or {}).get(url, region)
+        parsed = collect_from_text(text, region=source_region)
         nodes.extend(parsed)
         source_runs.append(SourceRun(url, True, len(parsed)))
 
