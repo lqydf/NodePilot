@@ -1,4 +1,4 @@
-from app.models.source import Node
+from app.models.node import Node
 from app.services.measurement import Measurement
 from app.services.ranker import rank_nodes
 
