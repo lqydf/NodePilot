@@ -10,7 +10,7 @@ from app.services.collector import collect_from_text
 from app.services.measurement import Measurement
 from app.services.probe import tcp_probe
 from app.services.proxy_probe import probe_proxy
-from app.services.ranker import RankedNode, rank_nodes
+from app.services.ranker import RankedNode, rank_verified_nodes
 from app.services.source_fetcher import SourceFetchError, fetch_text_source
 
 
@@ -41,10 +41,18 @@ class LiveRun:
     youtube_verified: set[str] = field(default_factory=set)
 
 
-def run_live_pipeline(urls: list[str], *, region: str | None = None,
-                      region_by_url: dict[str, str] | None = None, limit: int = 10,
-                      timeout: float = 3.0, max_candidates: int = 1000,
-                      workers: int = 32, real_proxy_limit: int = 60) -> LiveRun:
+def run_live_pipeline(
+    urls: list[str],
+    *,
+    region: str | None = None,
+    region_by_url: dict[str, str] | None = None,
+    limit: int = 10,
+    timeout: float = 3.0,
+    max_candidates: int = 1000,
+    workers: int = 32,
+    real_proxy_limit: int = 60,
+) -> LiveRun:
+    """Collect globally, deduplicate once, then probe the shared candidate pool."""
     if min(limit, max_candidates, workers, real_proxy_limit) < 1:
         raise ValueError("limits and workers must be at least 1")
 
@@ -60,6 +68,7 @@ def run_live_pipeline(urls: list[str], *, region: str | None = None,
         nodes.extend(parsed)
         source_runs.append(SourceRun(url, True, len(parsed)))
 
+    # One global pool prevents the same node from being tested once per source.
     unique = {node.node_id: node for node in nodes}
     candidates = list(unique.values())[:max_candidates]
 
@@ -81,7 +90,7 @@ def run_live_pipeline(urls: list[str], *, region: str | None = None,
                 tcp_reachable.append(item)
     tcp_reachable.sort(key=lambda x: (x[1].latency_ms, x[0].node_id))
 
-    measured: list[tuple[Node, Measurement]] = []
+    measured: list[tuple[Node, Measurement, bool]] = []
     proxy_errors: Counter[str] = Counter()
     youtube_verified: set[str] = set()
     real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
@@ -90,41 +99,54 @@ def run_live_pipeline(urls: list[str], *, region: str | None = None,
         proxy_candidates = tcp_reachable[:real_proxy_limit]
 
         def proxy_measure(item):
-            node, _tcp = item
+            node, tcp_measurement = item
             if not node.source_uri:
-                return None, "missing_source_uri", False
+                return None, "missing_source_uri", False, False
             result = probe_proxy(node.source_uri, timeout_s=max(timeout, 5.0))
-            # MVP rule: successful real HTTP proxying is enough to publish one
-            # usable node. YouTube and speed are enrichment signals, not gates.
+            # Real proxy forwarding is the verification gate. Speed and YouTube
+            # checks are enrichment signals and must not turn a working proxy
+            # into a false negative.
             if not result.ok:
-                return None, result.error or "proxy_verification_failed", False
-            latency = result.youtube_latency_ms or _tcp.latency_ms
-            return node, Measurement(
+                return None, result.error or "proxy_verification_failed", False, False
+            speed_tested = result.download_mbps is not None
+            latency = result.youtube_latency_ms or tcp_measurement.latency_ms
+            measurement = Measurement(
                 latency_ms=latency,
                 download_mbps=result.download_mbps or 0.0,
                 packet_loss_pct=0.0,
                 availability_pct=100.0,
-            ), result.youtube_ok
+            )
+            return node, measurement, result.youtube_ok, speed_tested
 
         with ThreadPoolExecutor(max_workers=min(workers, len(proxy_candidates) or 1)) as pool:
             futures = [pool.submit(proxy_measure, item) for item in proxy_candidates]
             for future in as_completed(futures):
-                item = future.result()
-                if item[0] is not None:
-                    node, measurement, youtube_ok = item
-                    measured.append((node, measurement))
+                node, error, youtube_ok, speed_tested = future.result()
+                if node is not None:
+                    measurement = error
+                    measured.append((node, measurement, speed_tested))
                     if youtube_ok:
                         youtube_verified.add(node.node_id)
                 else:
-                    proxy_errors[item[1]] += 1
+                    proxy_errors[error] += 1
         measured.sort(key=lambda x: (x[1].latency_ms, x[0].node_id))
 
-    ranked = rank_nodes(measured, limit=limit)
-    reachable_source = measured if real_proxy_test else tcp_reachable
-    reachable_ranked = [ReachableNode(node, measurement, index)
-                        for index, (node, measurement) in enumerate(reachable_source[:limit], 1)]
-    return LiveRun(source_runs, len(candidates), len(tcp_reachable), ranked, reachable_ranked,
-                   len(measured), dict(proxy_errors), youtube_verified)
+    ranked = rank_verified_nodes(measured, limit=limit) if real_proxy_test else []
+    reachable_source = [item[:2] for item in measured] if real_proxy_test else tcp_reachable
+    reachable_ranked = [
+        ReachableNode(node, measurement, index)
+        for index, (node, measurement) in enumerate(reachable_source[:limit], 1)
+    ]
+    return LiveRun(
+        source_runs,
+        len(candidates),
+        len(tcp_reachable),
+        ranked,
+        reachable_ranked,
+        len(measured),
+        dict(proxy_errors),
+        youtube_verified,
+    )
 
 
 def _endpoint(node: Node) -> tuple[str, int] | tuple[None, None]:
