@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.services.default_sources import ASIA_SOURCES
+from app.services.default_sources import GLOBAL_SOURCES
 from app.services.runner import run_once
 from app.services.source_registry import enabled_urls
 
@@ -15,46 +16,33 @@ DATA_FILE = FRONTEND / "data" / "live.json"
 SUB_FILE = FRONTEND / "sub" / "top10.txt"
 
 
-def _select_diverse_top10(items: list[dict[str, object]], *, limit: int = 10, per_region: int = 3) -> list[dict[str, object]]:
-    """Prefer low latency while preventing one source region from filling the list."""
-    ordered = sorted(items, key=lambda item: (float(item["latency_ms"]), str(item["node_id"])))
-    selected: list[dict[str, object]] = []
-    counts: dict[str, int] = {}
-
-    for item in ordered:
-        region = str(item.get("region") or "UNKNOWN")
-        if counts.get(region, 0) >= per_region:
-            continue
-        selected.append(item)
-        counts[region] = counts.get(region, 0) + 1
-        if len(selected) == limit:
-            break
-
-    if len(selected) < limit:
-        chosen = {str(item["node_id"]) for item in selected}
-        for item in ordered:
-            if str(item["node_id"]) in chosen:
-                continue
-            selected.append(item)
-            if len(selected) == limit:
-                break
-
+def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> list[dict[str, object]]:
+    """Select the globally best measured nodes without regional quotas."""
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            -float(item.get("score", 0)),
+            float(item.get("latency_ms", 999999)),
+            str(item.get("node_id", "")),
+        ),
+    )
+    selected = ordered[:limit]
     for rank, item in enumerate(selected, start=1):
         item["rank"] = rank
     return selected
 
 
 def main() -> None:
-    sources = [source for source in ASIA_SOURCES if source.enabled]
+    sources = [source for source in GLOBAL_SOURCES if source.enabled]
     urls = enabled_urls(sources)
     region_by_url = {source.url.strip(): source.region for source in sources if source.region}
 
-    all_reachable: list[dict[str, object]] = []
     source_results: list[dict[str, object]] = []
     final_quality: list[dict[str, object]] = []
+    reachable_count = 0
 
-    # Scan each East-Asia source independently so one large country feed cannot
-    # consume the global candidate budget before other regions are considered.
+    # Scan each source independently so one large feed cannot consume the
+    # entire global candidate budget before other regions are considered.
     for url in urls:
         result = run_once(
             [url],
@@ -65,21 +53,23 @@ def main() -> None:
             workers=32,
         )
         source_results.extend(result["sources"])
-        all_reachable.extend(result["reachable_ranked"])
+        reachable_count += int(result["reachable"])
         final_quality.extend(result["ranked"])
 
-    published = _select_diverse_top10(all_reachable, limit=10, per_region=3)
+    published = _select_global_top10(final_quality, limit=10)
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    real_proxy = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
     payload = {
         "generated_at": timestamp,
-        "status": "tcp_reachable",
-        "final_quality_ranking": final_quality[:10],
+        "status": "proxy_verified" if real_proxy else "tcp_reachable",
+        "final_quality_ranking": _select_global_top10(final_quality, limit=10),
         "top10": published,
         "summary": {
             "source_count": len(source_results),
             "candidates": sum(int(result["node_count"]) for result in source_results),
-            "reachable": len(all_reachable),
+            "reachable": reachable_count,
+            "proxy_verified": len(final_quality) if real_proxy else 0,
             "published": len(published),
         },
     }
