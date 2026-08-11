@@ -37,4 +37,25 @@ document.getElementById('copyBtn').addEventListener('click',async()=>{
   setTimeout(()=>document.getElementById('copyBtn').textContent='复制地址',1200);
 });
 
+const qrModal=document.getElementById('qrModal');
+const qrContainer=document.getElementById('qrcode');
+const qrUrl=document.getElementById('qrUrl');
+
+document.getElementById('qrBtn').addEventListener('click',()=>{
+  const text=document.getElementById('subUrl').textContent.trim();
+  qrContainer.innerHTML='';
+  qrUrl.textContent=text;
+  if(window.QRCode){
+    new QRCode(qrContainer,{text,width:220,height:220,correctLevel:QRCode.CorrectLevel.M});
+    qrModal.hidden=false;
+  }else{
+    qrUrl.textContent='二维码组件加载失败，请稍后重试';
+  }
+});
+
+document.getElementById('qrClose').addEventListener('click',()=>{qrModal.hidden=true;});
+qrModal.addEventListener('click',(event)=>{if(event.target===qrModal)qrModal.hidden=true;});
+
+document.addEventListener('keydown',(event)=>{if(event.key==='Escape')qrModal.hidden=true;});
+
 render();
