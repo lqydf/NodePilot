@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from app.models.node import Node
 from app.services.collector import collect_from_text
 from app.services.measurement import Measurement
-from app.services.probe import ProbeResult, tcp_probe
+from app.services.probe import tcp_probe
 from app.services.ranker import RankedNode, rank_nodes
-from app.services.source_fetcher import fetch_source
+from app.services.source_fetcher import SourceFetchError, fetch_text_source
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,11 +38,12 @@ def run_live_pipeline(
     source_runs: list[SourceRun] = []
 
     for url in urls:
-        result = fetch_source(url, timeout=timeout)
-        if not result.ok:
-            source_runs.append(SourceRun(url, False, 0, result.error))
+        try:
+            text = fetch_text_source(url, timeout=timeout)
+        except SourceFetchError as exc:
+            source_runs.append(SourceRun(url, False, 0, str(exc)))
             continue
-        parsed = collect_from_text(result.text, region=region)
+        parsed = collect_from_text(text, region=region)
         nodes.extend(parsed)
         source_runs.append(SourceRun(url, True, len(parsed)))
 
@@ -53,7 +54,7 @@ def run_live_pipeline(
 
     for node in candidates:
         host, port = _endpoint(node)
-        if host is None:
+        if host is None or port is None:
             continue
         result = tcp_probe(host, port, timeout_s=timeout)
         if not result.connected or result.latency_ms is None:
