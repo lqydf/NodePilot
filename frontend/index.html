@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="NodePilot - 亚洲用户网络节点质量监测与 TOP 10 推荐">
+  <meta name="description" content="NodePilot - 面向中国用户的全球网络节点质量监测与 TOP 10 推荐">
   <title>NodePilot · 实时节点质量</title>
   <link rel="stylesheet" href="./style.css">
 </head>
@@ -15,9 +15,9 @@
 
   <main>
     <section class="hero">
-      <div class="eyebrow">ASIA NETWORK QUALITY</div>
+      <div class="eyebrow">CHINA NETWORK QUALITY</div>
       <h1>真实数据 TOP 10</h1>
-      <p>自动采集公开节点并进行实时 TCP 连通性与延迟检测。当前版本不会把未验证的速度或 YouTube 播放能力伪装成测试结果。</p>
+      <p>面向中国用户，从全球公开候选节点中进行筛选，并根据实际可验证的网络质量进行排序。当前版本不会把未验证的速度或 YouTube 播放能力伪装成测试结果。</p>
       <div class="hero-meta">
         <span id="updatedAt">最后更新：加载中</span>
         <span id="candidateCount">候选节点：—</span>
@@ -27,8 +27,8 @@
 
     <section class="toolbar">
       <div>
-        <strong>推荐候选</strong>
-        <span class="muted">当前按真实 TCP 延迟排序</span>
+        <strong>NodePilot 自动筛选</strong>
+        <span class="muted">由网站自动选择当前验证结果最优的节点</span>
       </div>
       <button id="refreshBtn" class="refresh">刷新页面</button>
     </section>
@@ -38,7 +38,7 @@
     <section class="subscribe-card">
       <div>
         <div class="eyebrow">LIVE SUBSCRIPTION</div>
-        <h2>获取当前 TOP 10 候选</h2>
+        <h2>获取当前 TOP 10 订阅</h2>
         <p id="subStatus">等待真实扫描结果。</p>
       </div>
       <div class="subscription-row">
