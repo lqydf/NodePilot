@@ -3,6 +3,8 @@ name: Deploy NodePilot frontend to GitHub Pages
 on:
   push:
     branches: ["main"]
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -20,9 +22,19 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Generate real NodePilot snapshot
+        working-directory: backend
+        run: python generate_snapshot.py
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
