@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from app.models.node import Node
@@ -19,27 +20,49 @@ class SourceRun:
 
 
 @dataclass(frozen=True, slots=True)
+class ReachableNode:
+    node: Node
+    measurement: Measurement
+    rank: int
+
+
+@dataclass(frozen=True, slots=True)
 class LiveRun:
     sources: list[SourceRun]
     candidates: int
     reachable: int
     ranked: list[RankedNode]
+    reachable_ranked: list[ReachableNode]
 
 
 def run_live_pipeline(
-    urls: list[str], *, region: str | None = None, limit: int = 10, timeout: float = 3.0
+    urls: list[str],
+    *,
+    region: str | None = None,
+    limit: int = 10,
+    timeout: float = 3.0,
+    max_candidates: int = 1000,
+    workers: int = 32,
 ) -> LiveRun:
-    """Fetch public text sources, parse nodes, probe endpoints, and rank them.
+    """Fetch public text sources, probe a bounded candidate set, and rank results.
 
-    This MVP intentionally measures TCP reachability only. It does not relay
-    traffic or attempt to authenticate to a proxy service.
+    The current MVP measures TCP reachability only. It does not relay traffic
+    or authenticate to proxy services. Candidate probing is bounded and
+    concurrent so one stale source cannot create an unbounded scan.
     """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if max_candidates < 1:
+        raise ValueError("max_candidates must be at least 1")
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+
     nodes: list[Node] = []
     source_runs: list[SourceRun] = []
 
     for url in urls:
         try:
-            text = fetch_text_source(url, timeout=timeout)
+            text = fetch_text_source(url, timeout=timeout, max_bytes=8_000_000)
         except SourceFetchError as exc:
             source_runs.append(SourceRun(url, False, 0, str(exc)))
             continue
@@ -48,35 +71,45 @@ def run_live_pipeline(
         source_runs.append(SourceRun(url, True, len(parsed)))
 
     unique: dict[str, Node] = {node.node_id: node for node in nodes}
-    candidates = list(unique.values())
+    candidates = list(unique.values())[:max_candidates]
     measured: list[tuple[Node, Measurement]] = []
-    reachable = 0
 
-    for node in candidates:
+    def measure(node: Node) -> tuple[Node, Measurement] | None:
         host, port = _endpoint(node)
         if host is None or port is None:
-            continue
+            return None
         result = tcp_probe(host, port, timeout_s=timeout)
         if not result.connected or result.latency_ms is None:
-            continue
-        reachable += 1
-        measured.append(
-            (
-                node,
-                Measurement(
-                    latency_ms=result.latency_ms,
-                    download_mbps=0.0,
-                    packet_loss_pct=0.0,
-                    availability_pct=100.0,
-                ),
-            )
+            return None
+        return (
+            node,
+            Measurement(
+                latency_ms=result.latency_ms,
+                download_mbps=0.0,
+                packet_loss_pct=0.0,
+                availability_pct=100.0,
+            ),
         )
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(candidates) or 1)) as pool:
+        futures = [pool.submit(measure, node) for node in candidates]
+        for future in as_completed(futures):
+            item = future.result()
+            if item is not None:
+                measured.append(item)
+
+    measured.sort(key=lambda item: (item[1].latency_ms, item[0].node_id))
+    reachable_ranked = [
+        ReachableNode(node=node, measurement=measurement, rank=index)
+        for index, (node, measurement) in enumerate(measured[:limit], start=1)
+    ]
 
     return LiveRun(
         sources=source_runs,
         candidates=len(candidates),
-        reachable=reachable,
+        reachable=len(measured),
         ranked=rank_nodes(measured, limit=limit),
+        reachable_ranked=reachable_ranked,
     )
 
 
