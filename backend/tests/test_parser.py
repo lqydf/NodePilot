@@ -9,6 +9,16 @@ def test_parser_accepts_supported_uri():
     assert node.region == "JP"
 
 
+def test_parser_normalizes_html_escaped_query_separators():
+    node = parse_node_uri(
+        "vless://user@example.com:443?type=ws&amp;security=tls&amp;sni=example.com"
+    )
+    assert node is not None
+    assert node.source_uri is not None
+    assert "&amp;" not in node.source_uri
+    assert "&security=tls" in node.source_uri
+
+
 def test_parser_rejects_unsupported_uri():
     assert parse_node_uri("http://example.com:80") is None
 
