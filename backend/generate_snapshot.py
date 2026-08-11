@@ -51,7 +51,7 @@ def main() -> None:
             region_by_url=region_by_url,
             limit=10,
             timeout=3.0,
-            max_candidates=400,
+            max_candidates=120,
             workers=32,
             real_proxy_limit=10,
         )
