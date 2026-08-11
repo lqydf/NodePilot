@@ -20,10 +20,12 @@ def rank_nodes(
     *,
     limit: int = 10,
 ) -> list[RankedNode]:
-    """Filter and rank measured nodes for the Asia-focused TOP list.
+    """Rank globally collected nodes for users in Asia.
 
-    Only eligible measurements are ranked. Ties are resolved deterministically
-    by score, latency, download speed, and node_id so repeated runs are stable.
+    Geographic origin is not a ranking restriction. A node from any region may
+    enter the TOP list when its measured quality is good enough. The user's
+    location is represented by the measurement environment and scoring policy,
+    not by restricting node.region to Asia.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
