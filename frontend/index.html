@@ -4,47 +4,47 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="NodePilot - 亚洲用户网络节点质量监测与 TOP 10 推荐">
-  <title>NodePilot · 今日 TOP 10</title>
+  <title>NodePilot · 实时节点质量</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <header class="nav">
     <div class="brand"><span class="brand-mark">N</span><span>NodePilot</span></div>
-    <div class="nav-status"><span class="dot"></span> 数据监测中</div>
+    <div id="navStatus" class="nav-status"><span class="dot"></span> 正在加载真实数据</div>
   </header>
 
   <main>
     <section class="hero">
       <div class="eyebrow">ASIA NETWORK QUALITY</div>
-      <h1>今日 TOP 10</h1>
-      <p>自动测试公开节点的延迟、速度、丢包与稳定性，为亚洲用户筛选综合表现更好的线路。</p>
+      <h1>真实数据 TOP 10</h1>
+      <p>自动采集公开节点并进行实时 TCP 连通性与延迟检测。当前版本不会把未验证的速度或 YouTube 播放能力伪装成测试结果。</p>
       <div class="hero-meta">
-        <span>最后更新：今天 02:35</span>
-        <span>已测试：12,846 个候选节点</span>
-        <span>下次更新：18 分钟</span>
+        <span id="updatedAt">最后更新：加载中</span>
+        <span id="candidateCount">候选节点：—</span>
+        <span id="reachableCount">TCP 可达：—</span>
       </div>
     </section>
 
     <section class="toolbar">
       <div>
-        <strong>推荐节点</strong>
-        <span class="muted">按综合评分排序</span>
+        <strong>推荐候选</strong>
+        <span class="muted">当前按真实 TCP 延迟排序</span>
       </div>
-      <button id="refreshBtn" class="refresh">刷新排名</button>
+      <button id="refreshBtn" class="refresh">刷新页面</button>
     </section>
 
     <section id="nodes" class="node-list"></section>
 
     <section class="subscribe-card">
       <div>
-        <div class="eyebrow">TOP 10 SUBSCRIPTION</div>
-        <h2>一键获取今日 TOP 10</h2>
-        <p>当前为 V1 首页预览，订阅接口将在后端完成后接入。</p>
+        <div class="eyebrow">LIVE SUBSCRIPTION</div>
+        <h2>获取当前 TOP 10 候选</h2>
+        <p id="subStatus">等待真实扫描结果。</p>
       </div>
       <div class="subscription-row">
-        <code id="subUrl">https://nodepilot.example/api/sub/top10</code>
-        <button id="copyBtn">复制地址</button>
-        <button id="qrBtn" type="button">生成二维码</button>
+        <code id="subUrl">暂无订阅地址</code>
+        <button id="copyBtn" disabled>复制地址</button>
+        <button id="qrBtn" type="button" disabled>生成二维码</button>
       </div>
     </section>
   </main>
@@ -56,14 +56,9 @@
       <h2 id="qrTitle">TOP 10 订阅二维码</h2>
       <div id="qrcode" class="qrcode"></div>
       <code id="qrUrl"></code>
-      <p>用手机扫码即可复制或打开订阅地址。</p>
+      <p>用手机扫码获取订阅地址。</p>
     </div>
   </div>
-
-  <footer>
-    <span>NodePilot V1 Preview</span>
-    <span>数据仅用于网络质量测试展示</span>
-  </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script src="./app.js"></script>
