@@ -19,9 +19,14 @@ SUB_FILE = FRONTEND / "sub" / "top10.txt"
 
 
 def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> list[dict[str, object]]:
-    ordered = sorted(items, key=lambda item: (-float(item.get("score", 0)),
-                                              float(item.get("latency_ms", 999999)),
-                                              str(item.get("node_id", ""))))
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            -float(item.get("score", 0)),
+            float(item.get("latency_ms", 999999)),
+            str(item.get("node_id", "")),
+        ),
+    )
     selected = ordered[:limit]
     for rank, item in enumerate(selected, start=1):
         item["rank"] = rank
@@ -29,8 +34,15 @@ def _select_global_top10(items: list[dict[str, object]], *, limit: int = 10) -> 
 
 
 def _scan_source(url: str, region_by_url: dict[str, str]) -> dict[str, object]:
-    return run_once([url], region_by_url=region_by_url, limit=10, timeout=3.0,
-                    max_candidates=120, workers=16, real_proxy_limit=150)
+    return run_once(
+        [url],
+        region_by_url=region_by_url,
+        limit=10,
+        timeout=3.0,
+        max_candidates=120,
+        workers=16,
+        real_proxy_limit=150,
+    )
 
 
 def main() -> None:
@@ -54,27 +66,46 @@ def main() -> None:
     published = _select_global_top10(final_quality, limit=10)
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     real_proxy = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
+    proxy_verified_count = len(final_quality) if real_proxy else 0
+
     payload = {
         "generated_at": timestamp,
-        "status": "proxy_verified" if real_proxy and published else "no_verified_nodes" if real_proxy else "tcp_reachable",
+        "status": (
+            "proxy_verified" if real_proxy and published
+            else "no_verified_nodes" if real_proxy
+            else "tcp_reachable"
+        ),
         "final_quality_ranking": _select_global_top10(final_quality, limit=10),
         "top10": published,
         "summary": {
             "source_count": len(source_results),
             "candidates": sum(int(result["node_count"]) for result in source_results),
             "reachable": reachable_count,
-            "proxy_verified": len(final_quality) if real_proxy else 0,
+            "proxy_verified": proxy_verified_count,
             "published": len(published),
             "proxy_errors": dict(proxy_errors),
         },
     }
+
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     SUB_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     uris = [item["source_uri"] for item in published if item.get("source_uri")]
     encoded = base64.b64encode(("\n".join(uris) + ("\n" if uris else "")).encode()).decode()
     SUB_FILE.write_text(encoded + "\n", encoding="ascii")
+
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
+
+    # Never publish a green Pages build containing an empty or incomplete
+    # verified set. In real-proxy mode the scanner must produce ten actual
+    # verified nodes before the workflow is allowed to deploy the snapshot.
+    if real_proxy and len(published) < 10:
+        raise RuntimeError(
+            "REAL_PROXY_VALIDATION_FAILED: "
+            f"proxy_verified={proxy_verified_count}, published={len(published)}; "
+            "refusing to publish an unverified/incomplete TOP 10 snapshot"
+        )
 
 
 if __name__ == "__main__":
