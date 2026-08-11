@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +41,7 @@ def main() -> None:
     source_results: list[dict[str, object]] = []
     final_quality: list[dict[str, object]] = []
     reachable_count = 0
+    proxy_errors: Counter[str] = Counter()
 
     # Scan each source independently so one large feed cannot consume the
     # entire global candidate budget before other regions are considered.
@@ -51,10 +53,12 @@ def main() -> None:
             timeout=3.0,
             max_candidates=400,
             workers=32,
+            real_proxy_limit=60,
         )
         source_results.extend(result["sources"])
         reachable_count += int(result["reachable"])
         final_quality.extend(result["ranked"])
+        proxy_errors.update(result.get("proxy_errors", {}))
 
     published = _select_global_top10(final_quality, limit=10)
 
@@ -62,7 +66,7 @@ def main() -> None:
     real_proxy = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
     payload = {
         "generated_at": timestamp,
-        "status": "proxy_verified" if real_proxy else "tcp_reachable",
+        "status": "proxy_verified" if real_proxy and published else "no_verified_nodes" if real_proxy else "tcp_reachable",
         "final_quality_ranking": _select_global_top10(final_quality, limit=10),
         "top10": published,
         "summary": {
@@ -71,6 +75,7 @@ def main() -> None:
             "reachable": reachable_count,
             "proxy_verified": len(final_quality) if real_proxy else 0,
             "published": len(published),
+            "proxy_errors": dict(proxy_errors),
         },
     }
 
@@ -81,6 +86,8 @@ def main() -> None:
     uris = [item["source_uri"] for item in published if item.get("source_uri")]
     encoded = base64.b64encode(("\n".join(uris) + ("\n" if uris else "")).encode()).decode()
     SUB_FILE.write_text(encoded + "\n", encoding="ascii")
+
+    print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
