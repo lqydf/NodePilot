@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -7,6 +8,7 @@ from app.models.node import Node
 from app.services.collector import collect_from_text
 from app.services.measurement import Measurement
 from app.services.probe import tcp_probe
+from app.services.proxy_probe import probe_proxy
 from app.services.ranker import RankedNode, rank_nodes
 from app.services.source_fetcher import SourceFetchError, fetch_text_source
 
@@ -45,11 +47,11 @@ def run_live_pipeline(
     max_candidates: int = 1000,
     workers: int = 32,
 ) -> LiveRun:
-    """Fetch public text sources, probe a bounded candidate set, and rank results.
+    """Collect, probe and rank nodes.
 
-    The current MVP measures TCP reachability only. It does not relay traffic
-    or authenticate to proxy services. Candidate probing is bounded and
-    concurrent so one stale source cannot create an unbounded scan.
+    Set NODEPILOT_REAL_PROXY_TEST=1 to require a real proxied HTTPS request
+    through each candidate. The normal local mode retains TCP-only probing so
+    development does not require an external sing-box binary.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -75,22 +77,35 @@ def run_live_pipeline(
     unique: dict[str, Node] = {node.node_id: node for node in nodes}
     candidates = list(unique.values())[:max_candidates]
     measured: list[tuple[Node, Measurement]] = []
+    real_proxy_test = os.environ.get("NODEPILOT_REAL_PROXY_TEST") == "1"
 
     def measure(node: Node) -> tuple[Node, Measurement] | None:
+        if real_proxy_test:
+            if not node.source_uri:
+                return None
+            result = probe_proxy(node.source_uri, timeout_s=max(timeout, 8.0))
+            if not result.ok or result.latency_ms is None:
+                return None
+            elapsed_s = result.latency_ms / 1000
+            speed_mbps = (result.bytes_received * 8 / elapsed_s / 1_000_000) if elapsed_s > 0 else 0.0
+            return node, Measurement(
+                latency_ms=result.latency_ms,
+                download_mbps=round(speed_mbps, 3),
+                packet_loss_pct=0.0,
+                availability_pct=100.0,
+            )
+
         host, port = _endpoint(node)
         if host is None or port is None:
             return None
         result = tcp_probe(host, port, timeout_s=timeout)
         if not result.connected or result.latency_ms is None:
             return None
-        return (
-            node,
-            Measurement(
-                latency_ms=result.latency_ms,
-                download_mbps=0.0,
-                packet_loss_pct=0.0,
-                availability_pct=100.0,
-            ),
+        return node, Measurement(
+            latency_ms=result.latency_ms,
+            download_mbps=0.0,
+            packet_loss_pct=0.0,
+            availability_pct=100.0,
         )
 
     with ThreadPoolExecutor(max_workers=min(workers, len(candidates) or 1)) as pool:
@@ -116,7 +131,6 @@ def run_live_pipeline(
 
 
 def _endpoint(node: Node) -> tuple[str, int] | tuple[None, None]:
-    """Extract the endpoint from the canonical node id without probing arbitrary text."""
     endpoint = node.node_id.rsplit("@", 1)[-1]
     host, separator, port_text = endpoint.rpartition(":")
     if not separator or not host or not port_text.isdigit():
