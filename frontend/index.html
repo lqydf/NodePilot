@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="NodePilot - 面向中国用户的全球网络节点质量监测与 TOP 10 推荐">
-  <title>NodePilot · 实时节点质量</title>
+  <meta name="description" content="NodePilot - 面向中国用户的全球网络质量监测与 TOP 10 推荐">
+  <title>NodePilot · 网络质量</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -16,19 +16,33 @@
   <main>
     <section class="hero">
       <div class="eyebrow">CHINA NETWORK QUALITY</div>
-      <h1>真实数据 TOP 10</h1>
-      <p>面向中国用户，从全球公开候选节点中进行筛选，并根据实际可验证的网络质量进行排序。当前版本不会把未验证的速度或 YouTube 播放能力伪装成测试结果。</p>
+      <h1>真实网络质量 TOP 10</h1>
+      <p>面向中国用户，按真实网络质量数据排序。你也可以添加自己控制的测试数据源，NodePilot 会对其可访问性、响应时间和下载速度进行测量。</p>
       <div class="hero-meta">
         <span id="updatedAt">最后更新：加载中</span>
-        <span id="candidateCount">候选节点：—</span>
-        <span id="reachableCount">TCP 可达：—</span>
+        <span id="candidateCount">候选：—</span>
+        <span id="reachableCount">可达：—</span>
       </div>
+    </section>
+
+    <section class="source-card">
+      <div>
+        <div class="eyebrow">CUSTOM TEST SOURCE</div>
+        <h2>添加你的测试数据源</h2>
+        <p>仅用于你自己控制或获准测试的 HTTP/HTTPS 数据源。地址保存在当前浏览器本地。</p>
+      </div>
+      <div class="source-form">
+        <input id="sourceUrl" type="url" placeholder="https://example.com/test.json" autocomplete="off">
+        <button id="addSourceBtn" class="primary">添加并测试</button>
+      </div>
+      <div id="sourceMessage" class="source-message"></div>
+      <div id="sourceList" class="source-list"></div>
     </section>
 
     <section class="toolbar">
       <div>
-        <strong>NodePilot 自动筛选</strong>
-        <span class="muted">由网站自动选择当前验证结果最优的节点</span>
+        <strong>当前质量排名</strong>
+        <span class="muted">按测量结果自动排序，不足 10 个时不凑数</span>
       </div>
       <button id="refreshBtn" class="refresh">刷新页面</button>
     </section>
@@ -38,11 +52,11 @@
     <section class="subscribe-card">
       <div>
         <div class="eyebrow">LIVE SUBSCRIPTION</div>
-        <h2>获取当前 TOP 10 订阅</h2>
+        <h2>当前结果</h2>
         <p id="subStatus">等待真实扫描结果。</p>
       </div>
       <div class="subscription-row">
-        <code id="subUrl">暂无订阅地址</code>
+        <code id="subUrl">暂无地址</code>
         <button id="copyBtn" disabled>复制地址</button>
         <button id="qrBtn" type="button" disabled>生成二维码</button>
       </div>
@@ -53,10 +67,10 @@
     <div class="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qrTitle">
       <button id="qrClose" class="qr-close" type="button" aria-label="关闭">×</button>
       <div class="eyebrow">SUBSCRIPTION QR</div>
-      <h2 id="qrTitle">TOP 10 订阅二维码</h2>
+      <h2 id="qrTitle">结果地址二维码</h2>
       <div id="qrcode" class="qrcode"></div>
       <code id="qrUrl"></code>
-      <p>用手机扫码获取订阅地址。</p>
+      <p>用手机扫码获取地址。</p>
     </div>
   </div>
 
