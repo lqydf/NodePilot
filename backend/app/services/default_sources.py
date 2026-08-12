@@ -4,8 +4,8 @@ from app.services.source_registry import SourceConfig
 
 
 # Global public feeds. Region is metadata only; it never excludes a node from
-# ranking. The product target is now China users: global nodes remain eligible,
-# but the verification/ranking policy is explicitly optimized for Chinese users.
+# ranking. The product target is China users: global nodes remain eligible,
+# while verification/ranking is optimized for Chinese users.
 GLOBAL_SOURCES = [
     SourceConfig(url="https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/countries/JP.txt", region="JP"),
     SourceConfig(url="https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/countries/HK.txt", region="HK"),
@@ -23,6 +23,14 @@ GLOBAL_SOURCES = [
     SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/vmess.txt", region=None),
     SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/trojan.txt", region=None),
     SourceConfig(url="https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/ss.txt", region=None),
+
+    # Reference source supplied by the project owner. It is intentionally a
+    # normal candidate source: nodes are parsed and verified before publication.
+    # The source itself is not trusted as proof of availability.
+    SourceConfig(
+        url="https://node.clash-node.com/uploads/2026/08/2-20260805.yaml",
+        region=None,
+    ),
 ]
 
 # Backward-compatible alias for older imports.
